@@ -30,6 +30,11 @@ async function callBackend(path: string, request: Request, accessToken: string) 
 async function toResponse(upstream: Response) {
   const text = await upstream.text();
   const contentType = upstream.headers.get('content-type') ?? 'application/json';
+
+  if (!text && upstream.ok && upstream.status !== 204) {
+    return NextResponse.json(null, { status: upstream.status });
+  }
+
   return new NextResponse(text || null, {
     status: upstream.status,
     headers: { 'content-type': contentType },
