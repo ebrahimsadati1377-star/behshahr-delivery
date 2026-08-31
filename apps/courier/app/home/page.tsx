@@ -56,28 +56,81 @@ function mapHref(point?: AddressSnapshot) {
   return `geo:${point.latitude},${point.longitude}?q=${point.latitude},${point.longitude}`;
 }
 
-function OrderCard({ order, action, busy }: { order: CourierOrder; action: (path: string) => Promise<void>; busy: boolean }) {
-  const pickupMap = mapHref(order.pickupSnapshot);
-  const dropoffMap = mapHref(order.dropoffSnapshot);
+function missionStep(status: string) {
+  if (status === 'PICKED_UP') return 2;
+  if (status === 'ASSIGNED') return 1;
+  return 0;
+}
+
+function MissionProgress({ status }: { status: string }) {
+  const active = missionStep(status);
+  const steps = ['حرکت به مبدا', 'دریافت بسته', 'تحویل مقصد'];
   return (
-    <article className="order-card">
+    <div className="mission-progress" aria-label="مراحل مأموریت">
+      <div className="mission-track" aria-hidden="true"><span style={{ width: `${active * 50}%` }} /></div>
+      <div className="mission-steps">
+        {steps.map((label, index) => (
+          <div className={index <= active ? 'mission-step active' : 'mission-step'} key={label}>
+            <i>{index + 1}</i>
+            <span>{label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RoutePoint({ kind, point }: { kind: 'pickup' | 'dropoff'; point: AddressSnapshot }) {
+  const href = mapHref(point);
+  return (
+    <div className="route-point">
+      <div className={`route-pin ${kind}`}><span /></div>
+      <div className="route-copy">
+        <span className="route-kicker">{kind === 'pickup' ? 'مبدا' : 'مقصد'}</span>
+        <strong>{point?.title ?? (kind === 'pickup' ? 'مبدا' : 'مقصد')}</strong>
+        <p>{point?.formattedAddress ?? 'آدرس ثبت نشده'}</p>
+        {point?.details ? <small>{point.details}</small> : null}
+      </div>
+      {href ? <a className="route-nav" href={href} aria-label={`مسیریابی ${kind === 'pickup' ? 'مبدا' : 'مقصد'}`}>مسیریابی</a> : null}
+    </div>
+  );
+}
+
+function OrderCard({ order, action, busy, current = false }: { order: CourierOrder; action: (path: string) => Promise<void>; busy: boolean; current?: boolean }) {
+  return (
+    <article className={current ? 'order-card current-order-card' : 'order-card'}>
       <div className="order-head">
-        <div><span className="eyebrow">کد سفارش</span><strong className="code">{order.publicCode}</strong></div>
+        <div>
+          <span className="eyebrow">کد سفارش</span>
+          <strong className="code">{order.publicCode}</strong>
+        </div>
         <span className={`status status-${order.status.toLowerCase()}`}>{statusLabel[order.status] ?? order.status}</span>
       </div>
-      <div className="route">
-        <div className="route-item"><span className="dot pickup" /><div><b>{order.pickupSnapshot?.title ?? 'مبدا'}</b><span>{order.pickupSnapshot?.formattedAddress ?? '—'}</span>{pickupMap ? <a href={pickupMap}>مسیریابی مبدا</a> : null}</div></div>
-        <div className="route-item"><span className="dot dropoff" /><div><b>{order.dropoffSnapshot?.title ?? 'مقصد'}</b><span>{order.dropoffSnapshot?.formattedAddress ?? '—'}</span>{dropoffMap ? <a href={dropoffMap}>مسیریابی مقصد</a> : null}</div></div>
+
+      {current && ['ASSIGNED', 'PICKED_UP'].includes(order.status) ? <MissionProgress status={order.status} /> : null}
+
+      <div className="route-panel">
+        <RoutePoint kind="pickup" point={order.pickupSnapshot} />
+        <div className="route-connector" aria-hidden="true" />
+        <RoutePoint kind="dropoff" point={order.dropoffSnapshot} />
       </div>
-      <div className="stats">
-        <div><span>کرایه</span><strong>{toman(order.finalPriceToman ?? order.quotedPriceToman)} تومان</strong></div>
-        <div><span>فاصله</span><strong>{(order.distanceMeters / 1000).toLocaleString('fa-IR', { maximumFractionDigits: 1 })} کیلومتر</strong></div>
-        <div><span>زمان</span><strong>{order.estimatedDurationSeconds ? `${Math.max(1, Math.round(order.estimatedDurationSeconds / 60)).toLocaleString('fa-IR')} دقیقه` : '—'}</strong></div>
+
+      <div className="order-metrics">
+        <div><span>کرایه</span><strong>{toman(order.finalPriceToman ?? order.quotedPriceToman)}</strong><small>تومان</small></div>
+        <div><span>مسافت</span><strong>{(order.distanceMeters / 1000).toLocaleString('fa-IR', { maximumFractionDigits: 1 })}</strong><small>کیلومتر</small></div>
+        <div><span>زمان تقریبی</span><strong>{order.estimatedDurationSeconds ? Math.max(1, Math.round(order.estimatedDurationSeconds / 60)).toLocaleString('fa-IR') : '—'}</strong><small>دقیقه</small></div>
       </div>
-      {order.notes ? <p className="note">یادداشت: {order.notes}</p> : null}
-      {order.status === 'REQUESTED' ? <button className="primary" disabled={busy} onClick={() => action(`orders/${order.id}/accept`)}>قبول سفارش</button> : null}
-      {order.status === 'ASSIGNED' ? <div className="action-grid"><button className="primary" disabled={busy} onClick={() => action(`orders/${order.id}/picked-up`)}>بسته را تحویل گرفتم</button><button className="danger" disabled={busy} onClick={() => action(`orders/${order.id}/reject`)}>رد مأموریت</button></div> : null}
-      {order.status === 'PICKED_UP' ? <button className="success" disabled={busy} onClick={() => action(`orders/${order.id}/delivered`)}>بسته تحویل داده شد</button> : null}
+
+      {order.notes ? <div className="order-note"><span>یادداشت مشتری</span><p>{order.notes}</p></div> : null}
+
+      <div className="mission-actions">
+        {order.status === 'REQUESTED' ? <button className="primary large-action" disabled={busy} onClick={() => action(`orders/${order.id}/accept`)}>قبول این سفارش</button> : null}
+        {order.status === 'ASSIGNED' ? <>
+          <button className="primary large-action" disabled={busy} onClick={() => action(`orders/${order.id}/picked-up`)}>بسته را تحویل گرفتم</button>
+          <button className="danger subtle-action" disabled={busy} onClick={() => action(`orders/${order.id}/reject`)}>رد مأموریت</button>
+        </> : null}
+        {order.status === 'PICKED_UP' ? <button className="success large-action" disabled={busy} onClick={() => action(`orders/${order.id}/delivered`)}>تحویل به مشتری انجام شد</button> : null}
+      </div>
     </article>
   );
 }
@@ -150,19 +203,29 @@ export default function CourierHomePage() {
   }, [sendLocation]);
 
   async function setAvailability(status: 'AVAILABLE' | 'OFFLINE') {
-    setActionBusy(true); setError('');
+    setActionBusy(true);
+    setError('');
     try {
       await api('availability', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status }) });
       await load();
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'تغییر وضعیت ناموفق بود'); }
-    finally { setActionBusy(false); }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'تغییر وضعیت ناموفق بود');
+    } finally {
+      setActionBusy(false);
+    }
   }
 
   async function orderAction(path: string) {
-    setActionBusy(true); setError('');
-    try { await api(path, { method: 'POST' }); await load(); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : 'عملیات ناموفق بود'); }
-    finally { setActionBusy(false); }
+    setActionBusy(true);
+    setError('');
+    try {
+      await api(path, { method: 'POST' });
+      await load();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'عملیات ناموفق بود');
+    } finally {
+      setActionBusy(false);
+    }
   }
 
   function locateNow() {
@@ -180,36 +243,70 @@ export default function CourierHomePage() {
     router.replace('/');
   }
 
+  const lastSeen = profile?.lastSeenAt
+    ? new Date(profile.lastSeenAt).toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })
+    : null;
+
   return (
     <main className="shell dashboard-shell">
-      <header className="topbar">
-        <div><span className="eyebrow">پنل پیک</span><strong>ارسال بهشهر</strong></div>
-        <button className="text-button" type="button" onClick={() => void logout()}>خروج</button>
+      <header className="app-header">
+        <div className="app-identity">
+          <div className="mini-mark">پ</div>
+          <div><span>ارسال بهشهر</span><strong>پنل پیک</strong></div>
+        </div>
+        <button className="icon-text-button" type="button" onClick={() => void logout()}>خروج</button>
       </header>
 
-      {loading ? <section className="card"><p className="muted">در حال دریافت وضعیت…</p></section> : null}
-      {error ? <p className="error banner">{error}</p> : null}
+      {loading ? <section className="skeleton-card"><div /><div /><div /></section> : null}
+      {error ? <p className="error banner" role="alert">{error}</p> : null}
 
-      {profile ? <section className="status-card">
-        <div><span className="eyebrow">وضعیت کاری</span><h1>{statusLabel[profile.status] ?? profile.status}</h1><p>{profile.vehicleType === 'MOTORBIKE' ? 'موتورسیکلت' : 'خودرو'} • بروزرسانی سفارش‌ها هر ۱۰ ثانیه</p></div>
-        <span className={`presence presence-${profile.status.toLowerCase()}`} />
-        <div className="availability-actions">
-          <button className="success" disabled={actionBusy || profile.status === 'AVAILABLE' || profile.status === 'BUSY' || profile.status === 'SUSPENDED'} onClick={() => void setAvailability('AVAILABLE')}>آنلاین شو</button>
-          <button className="secondary" disabled={actionBusy || profile.status === 'OFFLINE' || profile.status === 'BUSY' || profile.status === 'SUSPENDED'} onClick={() => void setAvailability('OFFLINE')}>آفلاین شو</button>
+      {profile ? <section className={`shift-card shift-${profile.status.toLowerCase()}`}>
+        <div className="shift-topline">
+          <span className="shift-badge"><i />{statusLabel[profile.status] ?? profile.status}</span>
+          <span className="vehicle-chip">{profile.vehicleType === 'MOTORBIKE' ? 'موتورسیکلت' : 'خودرو'}</span>
+        </div>
+        <div className="shift-copy">
+          <span className="eyebrow">وضعیت شیفت</span>
+          <h1>{profile.status === 'AVAILABLE' ? 'آماده‌ای سفارش بگیری' : profile.status === 'BUSY' ? 'مأموریت در حال انجام است' : profile.status === 'SUSPENDED' ? 'حساب پیک تعلیق شده' : 'برای شروع شیفت آنلاین شو'}</h1>
+          <p>{profile.status === 'AVAILABLE' ? 'سفارش‌های جدید به‌صورت خودکار هر ۱۰ ثانیه نمایش داده می‌شوند.' : profile.status === 'BUSY' ? 'مراحل مأموریت را از کارت پایین مدیریت کن.' : 'تا وقتی آفلاین هستی سفارشی به صف تو اضافه نمی‌شود.'}</p>
+        </div>
+        <div className="shift-actions">
+          <button className="online-button" disabled={actionBusy || profile.status === 'AVAILABLE' || profile.status === 'BUSY' || profile.status === 'SUSPENDED'} onClick={() => void setAvailability('AVAILABLE')}><span className="button-dot" />آنلاین شو</button>
+          <button className="offline-button" disabled={actionBusy || profile.status === 'OFFLINE' || profile.status === 'BUSY' || profile.status === 'SUSPENDED'} onClick={() => void setAvailability('OFFLINE')}>پایان شیفت</button>
         </div>
       </section> : null}
 
-      <section className="location-card">
-        <div><strong>GPS پیک</strong><span>{locationStatus}</span></div>
-        <button className="small-button" type="button" onClick={locateNow}>ارسال الان</button>
+      <section className="tool-strip">
+        <button className="tool-card" type="button" onClick={locateNow}>
+          <span className="tool-icon">⌖</span>
+          <span><strong>GPS پیک</strong><small>{locationStatus}</small></span>
+        </button>
+        <button className="tool-card compact-tool" type="button" onClick={() => void load()}>
+          <span className="tool-icon">↻</span>
+          <span><strong>بروزرسانی</strong><small>{lastSeen ? `آخرین GPS ${lastSeen}` : 'دریافت وضعیت جدید'}</small></span>
+        </button>
       </section>
 
-      {current ? <section className="section"><div className="section-head"><div><span className="eyebrow">مأموریت جاری</span><h2>سفارش فعال</h2></div><button className="small-button" onClick={() => void load()}>بروزرسانی</button></div><OrderCard order={current} action={orderAction} busy={actionBusy} /></section> : null}
+      {current ? <section className="section current-section">
+        <div className="section-head">
+          <div><span className="eyebrow">مأموریت جاری</span><h2>سفارش فعال</h2></div>
+          <span className="live-chip"><i />زنده</span>
+        </div>
+        <OrderCard order={current} action={orderAction} busy={actionBusy} current />
+      </section> : null}
 
-      {!current && profile?.status === 'AVAILABLE' ? <section className="section"><div className="section-head"><div><span className="eyebrow">صف نزدیک</span><h2>سفارش‌های آماده</h2></div><span className="queue-count">{queue.length.toLocaleString('fa-IR')}</span></div>{queue.length ? <div className="order-list">{queue.map((order) => <OrderCard key={order.id} order={order} action={orderAction} busy={actionBusy} />)}</div> : <div className="empty"><strong>فعلاً سفارشی نیست</strong><span>به محض ثبت سفارش جدید، این لیست بروزرسانی می‌شود.</span></div>}</section> : null}
+      {!current && profile?.status === 'AVAILABLE' ? <section className="section queue-section">
+        <div className="section-head">
+          <div><span className="eyebrow">صف سفارش‌ها</span><h2>آماده دریافت</h2></div>
+          <span className="queue-count">{queue.length.toLocaleString('fa-IR')}</span>
+        </div>
+        {queue.length ? <div className="order-list">{queue.map((order) => <OrderCard key={order.id} order={order} action={orderAction} busy={actionBusy} />)}</div> : <div className="empty-state"><div className="empty-radar"><i /><i /><i /></div><strong>فعلاً سفارشی در صف نیست</strong><span>آنلاین بمان؛ با ثبت سفارش جدید این صفحه خودکار بروزرسانی می‌شود.</span></div>}
+      </section> : null}
 
-      {!current && profile?.status === 'OFFLINE' ? <div className="empty"><strong>برای دیدن سفارش‌ها آنلاین شو</strong><span>بعد از آنلاین شدن، صف سفارش‌های قابل قبول نمایش داده می‌شود.</span></div> : null}
-      <p className="footer-note">ردیابی موقعیت در نسخه فعلی فقط زمانی فعال است که این PWA باز باشد.</p>
+      {!current && profile?.status === 'OFFLINE' ? <div className="empty-state offline-empty"><div className="empty-power">◉</div><strong>شیفتت هنوز شروع نشده</strong><span>برای مشاهده و قبول سفارش‌های اطراف، از کارت بالا آنلاین شو.</span></div> : null}
+      {profile?.status === 'SUSPENDED' ? <div className="empty-state suspended-empty"><strong>دسترسی به دریافت سفارش متوقف است</strong><span>برای بررسی وضعیت حساب با مدیریت ناوگان تماس بگیر.</span></div> : null}
+
+      <p className="footer-note">ارسال موقعیت در نسخه فعلی فقط هنگام باز بودن PWA انجام می‌شود.</p>
     </main>
   );
 }
