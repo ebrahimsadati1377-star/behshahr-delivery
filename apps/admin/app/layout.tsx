@@ -15,7 +15,9 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="fa" dir="rtl">
-      <body className={vazirmatn.className}>{children}</body>
+      <body className={vazirmatn.className} style={{ fontFamily: vazirmatn.style.fontFamily }}>
+        {children}
+      </body>
     </html>
   );
 }
