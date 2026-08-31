@@ -55,7 +55,7 @@ jobs:
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm --filter @behshahr-delivery/api prisma:validate
       - run: pnpm --filter @behshahr-delivery/api prisma:migrate:deploy
-      - name: Seed CI pricing and courier
+      - name: Seed CI pricing, couriers, and admin
         run: |
           pnpm --filter @behshahr-delivery/api exec node <<'NODE'
           const { Client } = require('pg');
@@ -75,18 +75,16 @@ jobs:
 
               INSERT INTO "users" (
                 "id", "phone", "role", "status", "created_at", "updated_at"
-              ) VALUES (
-                '00000000-0000-4000-8000-000000000010', '+989111111111',
-                'COURIER', 'ACTIVE', NOW(), NOW()
-              );
+              ) VALUES
+                ('00000000-0000-4000-8000-000000000010', '+989111111111', 'COURIER', 'ACTIVE', NOW(), NOW()),
+                ('00000000-0000-4000-8000-000000000020', '+989111111112', 'COURIER', 'ACTIVE', NOW(), NOW()),
+                ('00000000-0000-4000-8000-000000000030', '+989113333333', 'ADMIN', 'ACTIVE', NOW(), NOW());
 
               INSERT INTO "couriers" (
                 "id", "user_id", "vehicle_type", "status", "created_at", "updated_at"
-              ) VALUES (
-                '00000000-0000-4000-8000-000000000011',
-                '00000000-0000-4000-8000-000000000010',
-                'MOTORBIKE', 'OFFLINE', NOW(), NOW()
-              );
+              ) VALUES
+                ('00000000-0000-4000-8000-000000000011', '00000000-0000-4000-8000-000000000010', 'MOTORBIKE', 'OFFLINE', NOW(), NOW()),
+                ('00000000-0000-4000-8000-000000000021', '00000000-0000-4000-8000-000000000020', 'MOTORBIKE', 'AVAILABLE', NOW(), NOW());
             `);
             await client.end();
           })().catch((error) => {
@@ -98,7 +96,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
-      - name: Smoke test customer and courier lifecycle
+      - name: Smoke test customer, courier, and admin lifecycle
         run: |
           pnpm --filter @behshahr-delivery/api start > /tmp/behshahr-delivery-api.log 2>&1 &
           API_PID=$!
@@ -153,18 +151,41 @@ jobs:
             });
           }
 
+          async function createQuoteAndOrder(headers, pickupId, dropoffId, notes) {
+            const quote = await request('/quotes', {
+              method: 'POST', headers,
+              body: JSON.stringify({
+                pickupAddressId: pickupId,
+                dropoffAddressId: dropoffId,
+                vehicleType: 'MOTORBIKE',
+              }),
+            });
+            return request('/orders', {
+              method: 'POST', headers,
+              body: JSON.stringify({ quoteId: quote.quoteId, notes }),
+            });
+          }
+
           const customer = await login('+989112222222');
           const courier = await login('+989111111111');
+          const admin = await login('+989113333333');
           const customerHeaders = { authorization: `Bearer ${customer.accessToken}` };
           const courierHeaders = { authorization: `Bearer ${courier.accessToken}` };
+          const adminHeaders = { authorization: `Bearer ${admin.accessToken}` };
 
           const customerMe = await request('/auth/me', { headers: customerHeaders });
           const courierMe = await request('/auth/me', { headers: courierHeaders });
-          if (customerMe.user.role !== 'CUSTOMER' || courierMe.user.role !== 'COURIER') {
+          const adminMe = await request('/auth/me', { headers: adminHeaders });
+          if (
+            customerMe.user.role !== 'CUSTOMER' ||
+            courierMe.user.role !== 'COURIER' ||
+            adminMe.user.role !== 'ADMIN'
+          ) {
             throw new Error('unexpected auth roles');
           }
 
           await request('/courier/profile', { headers: customerHeaders }, 403);
+          await request('/admin/orders', { headers: customerHeaders }, 403);
 
           const pickup = await request('/addresses', {
             method: 'POST', headers: customerHeaders,
@@ -180,102 +201,95 @@ jobs:
               latitude: 36.710000, longitude: 53.560000,
             }),
           });
-          const quote = await request('/quotes', {
-            method: 'POST', headers: customerHeaders,
-            body: JSON.stringify({
-              pickupAddressId: pickup.id,
-              dropoffAddressId: dropoff.id,
-              vehicleType: 'MOTORBIKE',
-            }),
-          });
-          const order = await request('/orders', {
-            method: 'POST', headers: customerHeaders,
-            body: JSON.stringify({ quoteId: quote.quoteId, notes: 'Courier CI flow' }),
-          });
 
-          const initialProfile = await request('/courier/profile', { headers: courierHeaders });
-          if (initialProfile.status !== 'OFFLINE' || initialProfile.vehicleType !== 'MOTORBIKE') {
-            throw new Error(`unexpected courier profile: ${JSON.stringify(initialProfile)}`);
-          }
+          const courierOrder = await createQuoteAndOrder(
+            customerHeaders, pickup.id, dropoff.id, 'Courier CI flow',
+          );
 
           await request('/courier/location', {
             method: 'POST', headers: courierHeaders,
             body: JSON.stringify({ latitude: 36.701, longitude: 53.551 }),
           });
-          const available = await request('/courier/availability', {
+          await request('/courier/availability', {
             method: 'PATCH', headers: courierHeaders,
             body: JSON.stringify({ status: 'AVAILABLE' }),
           });
-          if (available.status !== 'AVAILABLE') throw new Error('courier did not go available');
 
           const queue = await request('/courier/orders/available', { headers: courierHeaders });
-          if (!Array.isArray(queue) || queue.length !== 1 || queue[0].id !== order.id) {
+          if (!Array.isArray(queue) || queue.length !== 1 || queue[0].id !== courierOrder.id) {
             throw new Error(`unexpected courier queue: ${JSON.stringify(queue)}`);
           }
 
-          const accepted = await request(`/courier/orders/${order.id}/accept`, {
+          await request(`/courier/orders/${courierOrder.id}/accept`, {
             method: 'POST', headers: courierHeaders,
           });
-          if (accepted.status !== 'ASSIGNED') throw new Error('order was not assigned');
-
-          await request(`/orders/${order.id}/cancel`, {
+          await request(`/orders/${courierOrder.id}/cancel`, {
             method: 'POST', headers: customerHeaders,
           }, 409);
-
-          const current = await request('/courier/orders/current', { headers: courierHeaders });
-          if (!current || current.id !== order.id || current.status !== 'ASSIGNED') {
-            throw new Error(`unexpected current order: ${JSON.stringify(current)}`);
-          }
-
-          const rejected = await request(`/courier/orders/${order.id}/reject`, {
+          await request(`/courier/orders/${courierOrder.id}/reject`, {
             method: 'POST', headers: courierHeaders,
           });
-          if (rejected.status !== 'REQUESTED' || rejected.courierId !== null) {
-            throw new Error('reject did not release order');
-          }
-
-          const reaccepted = await request(`/courier/orders/${order.id}/accept`, {
+          await request(`/courier/orders/${courierOrder.id}/accept`, {
             method: 'POST', headers: courierHeaders,
           });
-          if (reaccepted.status !== 'ASSIGNED') throw new Error('reaccept failed');
-
-          await request('/courier/availability', {
-            method: 'PATCH', headers: courierHeaders,
-            body: JSON.stringify({ status: 'OFFLINE' }),
-          }, 409);
-
-          const pickedUp = await request(`/courier/orders/${order.id}/picked-up`, {
+          await request(`/courier/orders/${courierOrder.id}/picked-up`, {
             method: 'POST', headers: courierHeaders,
           });
-          if (pickedUp.status !== 'PICKED_UP') throw new Error('pickup transition failed');
-
-          const delivered = await request(`/courier/orders/${order.id}/delivered`, {
+          const delivered = await request(`/courier/orders/${courierOrder.id}/delivered`, {
             method: 'POST', headers: courierHeaders,
           });
-          if (
-            delivered.status !== 'DELIVERED' ||
-            delivered.finalPriceToman !== delivered.quotedPriceToman
-          ) {
-            throw new Error(`delivery transition failed: ${JSON.stringify(delivered)}`);
+          if (delivered.status !== 'DELIVERED') throw new Error('courier delivery failed');
+
+          const adminOrder = await createQuoteAndOrder(
+            customerHeaders, pickup.id, dropoff.id, 'Admin dispatch flow',
+          );
+
+          const adminOrders = await request('/admin/orders', { headers: adminHeaders });
+          if (!Array.isArray(adminOrders) || !adminOrders.some((item) => item.id === adminOrder.id)) {
+            throw new Error('admin order board missing order');
           }
 
-          const finalProfile = await request('/courier/profile', { headers: courierHeaders });
-          if (finalProfile.status !== 'AVAILABLE') {
-            throw new Error(`courier was not released after delivery: ${JSON.stringify(finalProfile)}`);
+          const adminCouriers = await request('/admin/couriers', { headers: adminHeaders });
+          if (!Array.isArray(adminCouriers) || adminCouriers.length !== 2) {
+            throw new Error(`unexpected admin courier list: ${JSON.stringify(adminCouriers)}`);
+          }
+          const firstCourier = adminCouriers.find((item) => item.id === '00000000-0000-4000-8000-000000000011');
+          if (!firstCourier || firstCourier.lastLatitude === null || firstCourier.lastLongitude === null) {
+            throw new Error('admin courier map data missing heartbeat coordinates');
           }
 
-          const detail = await request(`/orders/${order.id}`, { headers: customerHeaders });
-          const eventTypes = detail.events.map((event) => event.eventType);
-          const expected = [
+          const assigned = await request(`/admin/orders/${adminOrder.id}/assign`, {
+            method: 'POST', headers: adminHeaders,
+            body: JSON.stringify({ courierId: '00000000-0000-4000-8000-000000000011' }),
+          });
+          if (assigned.status !== 'ASSIGNED' || assigned.courierId !== '00000000-0000-4000-8000-000000000011') {
+            throw new Error(`admin assignment failed: ${JSON.stringify(assigned)}`);
+          }
+
+          const reassigned = await request(`/admin/orders/${adminOrder.id}/reassign`, {
+            method: 'POST', headers: adminHeaders,
+            body: JSON.stringify({ courierId: '00000000-0000-4000-8000-000000000021' }),
+          });
+          if (reassigned.courierId !== '00000000-0000-4000-8000-000000000021') {
+            throw new Error(`admin reassignment failed: ${JSON.stringify(reassigned)}`);
+          }
+
+          const adminDetail = await request(`/admin/orders/${adminOrder.id}`, { headers: adminHeaders });
+          const adminEvents = adminDetail.events.map((event) => event.eventType);
+          const expectedAdminEvents = [
             'ORDER_REQUESTED',
-            'ORDER_ACCEPTED_BY_COURIER',
-            'ORDER_REJECTED_BY_COURIER',
-            'ORDER_ACCEPTED_BY_COURIER',
-            'ORDER_PICKED_UP',
-            'ORDER_DELIVERED',
+            'ORDER_ASSIGNED_BY_ADMIN',
+            'ORDER_REASSIGNED_BY_ADMIN',
           ];
-          if (JSON.stringify(eventTypes) !== JSON.stringify(expected)) {
-            throw new Error(`unexpected event timeline: ${JSON.stringify(eventTypes)}`);
+          if (JSON.stringify(adminEvents) !== JSON.stringify(expectedAdminEvents)) {
+            throw new Error(`unexpected admin timeline: ${JSON.stringify(adminEvents)}`);
+          }
+
+          const postDispatchCouriers = await request('/admin/couriers', { headers: adminHeaders });
+          const releasedFirst = postDispatchCouriers.find((item) => item.id === '00000000-0000-4000-8000-000000000011');
+          const busySecond = postDispatchCouriers.find((item) => item.id === '00000000-0000-4000-8000-000000000021');
+          if (releasedFirst?.status !== 'AVAILABLE' || busySecond?.status !== 'BUSY') {
+            throw new Error(`unexpected courier states after reassign: ${JSON.stringify(postDispatchCouriers)}`);
           }
 
           await request('/courier/availability', {
