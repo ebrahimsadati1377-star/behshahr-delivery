@@ -18,6 +18,11 @@ jobs:
       OTP_SECRET: ci-otp-secret-change-me
       JWT_ACCESS_SECRET: ci-access-secret-change-me
       JWT_REFRESH_SECRET: ci-refresh-secret-change-me
+      SERVICE_CENTER_LAT: "36.700000"
+      SERVICE_CENTER_LNG: "53.550000"
+      SERVICE_RADIUS_METERS: "20000"
+      ROUTE_DISTANCE_FACTOR: "1.25"
+      ROUTE_AVG_SPEED_KMH: "25"
     services:
       postgres:
         image: postgis/postgis:16-3.4
@@ -50,11 +55,35 @@ jobs:
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm --filter @behshahr-delivery/api prisma:validate
       - run: pnpm --filter @behshahr-delivery/api prisma:migrate:deploy
+      - name: Seed CI pricing rule
+        run: |
+          pnpm --filter @behshahr-delivery/api exec node <<'NODE'
+          const { Client } = require('pg');
+
+          (async () => {
+            const client = new Client({ connectionString: process.env.DATABASE_URL });
+            await client.connect();
+            await client.query(`
+              INSERT INTO "pricing_rules" (
+                "id", "vehicle_type", "base_fare", "included_distance_meters",
+                "per_km_fare", "minimum_fare", "surge_multiplier", "is_active",
+                "created_at", "updated_at"
+              ) VALUES (
+                '00000000-0000-4000-8000-000000000001', 'MOTORBIKE', 50000, 1000,
+                15000, 50000, 1.00, true, NOW(), NOW()
+              )
+            `);
+            await client.end();
+          })().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
-      - name: Smoke test API health and auth
+      - name: Smoke test customer flow
         run: |
           pnpm --filter @behshahr-delivery/api start > /tmp/behshahr-delivery-api.log 2>&1 &
           API_PID=$!
@@ -107,12 +136,62 @@ jobs:
             throw new Error('verify-otp did not return token pair');
           }
 
-          const me = await jsonRequest('/auth/me', {
-            headers: { authorization: `Bearer ${session.accessToken}` },
-          });
+          const authHeaders = { authorization: `Bearer ${session.accessToken}` };
+          const me = await jsonRequest('/auth/me', { headers: authHeaders });
 
           if (me.user.phone !== phone || me.user.role !== 'CUSTOMER') {
             throw new Error(`unexpected authenticated user: ${JSON.stringify(me)}`);
+          }
+
+          const pickup = await jsonRequest('/addresses', {
+            method: 'POST',
+            headers: authHeaders,
+            body: JSON.stringify({
+              title: 'Pickup',
+              formattedAddress: 'CI pickup address',
+              latitude: 36.700000,
+              longitude: 53.550000,
+            }),
+          });
+
+          const dropoff = await jsonRequest('/addresses', {
+            method: 'POST',
+            headers: authHeaders,
+            body: JSON.stringify({
+              title: 'Dropoff',
+              formattedAddress: 'CI dropoff address',
+              latitude: 36.710000,
+              longitude: 53.560000,
+            }),
+          });
+
+          const updatedPickup = await jsonRequest(`/addresses/${pickup.id}`, {
+            method: 'PATCH',
+            headers: authHeaders,
+            body: JSON.stringify({ title: 'Updated Pickup' }),
+          });
+
+          if (updatedPickup.title !== 'Updated Pickup') {
+            throw new Error('address update did not persist');
+          }
+
+          const addresses = await jsonRequest('/addresses', { headers: authHeaders });
+          if (!Array.isArray(addresses) || addresses.length !== 2) {
+            throw new Error(`unexpected address list: ${JSON.stringify(addresses)}`);
+          }
+
+          const quote = await jsonRequest('/quotes', {
+            method: 'POST',
+            headers: authHeaders,
+            body: JSON.stringify({
+              pickupAddressId: pickup.id,
+              dropoffAddressId: dropoff.id,
+              vehicleType: 'MOTORBIKE',
+            }),
+          });
+
+          if (!quote.quoteId || quote.priceToman < 50000 || quote.routingMode !== 'APPROXIMATE') {
+            throw new Error(`unexpected quote: ${JSON.stringify(quote)}`);
           }
 
           const rotated = await jsonRequest('/auth/refresh', {
@@ -133,6 +212,16 @@ jobs:
           if (oldRefresh.status !== 401) {
             throw new Error(`old refresh token should be revoked, got ${oldRefresh.status}`);
           }
+
+          const rotatedHeaders = { authorization: `Bearer ${rotated.accessToken}` };
+          await jsonRequest(`/addresses/${pickup.id}`, {
+            method: 'DELETE',
+            headers: rotatedHeaders,
+          });
+          await jsonRequest(`/addresses/${dropoff.id}`, {
+            method: 'DELETE',
+            headers: rotatedHeaders,
+          });
 
           await jsonRequest('/auth/logout', {
             method: 'POST',
