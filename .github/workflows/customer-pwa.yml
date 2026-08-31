@@ -1,0 +1,100 @@
+name: Customer PWA
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify-customer-pwa:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/behshahr_delivery?schema=public
+      REDIS_URL: redis://localhost:6379
+      API_PORT: 4000
+      API_INTERNAL_URL: http://127.0.0.1:4000/api
+      NODE_ENV: test
+      SMS_PROVIDER: console
+      DEV_OTP_CODE: "123456"
+      OTP_SECRET: ci-otp-secret-change-me
+      JWT_ACCESS_SECRET: ci-access-secret-change-me
+      JWT_REFRESH_SECRET: ci-refresh-secret-change-me
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: behshahr_delivery
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d behshahr_delivery"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm --filter @behshahr-delivery/api prisma:migrate:deploy
+      - run: pnpm --filter @behshahr-delivery/api build
+      - run: pnpm --filter @behshahr-delivery/customer typecheck
+      - run: pnpm --filter @behshahr-delivery/customer build
+      - name: Smoke test PWA and BFF auth
+        run: |
+          pnpm --filter @behshahr-delivery/api start > /tmp/api.log 2>&1 &
+          API_PID=$!
+          pnpm --filter @behshahr-delivery/customer start > /tmp/customer.log 2>&1 &
+          WEB_PID=$!
+          trap 'kill $API_PID $WEB_PID || true' EXIT
+
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4000/api/health > /dev/null && curl --fail --silent http://127.0.0.1:3000/ > /dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              cat /tmp/api.log
+              cat /tmp/customer.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          curl --fail --silent \
+            -H 'content-type: application/json' \
+            -d '{"phone":"+989114444444"}' \
+            http://127.0.0.1:3000/api/session/request-otp > /tmp/request-otp.json
+
+          curl --fail --silent -c /tmp/customer-cookies.txt \
+            -H 'content-type: application/json' \
+            -d '{"phone":"+989114444444","code":"123456"}' \
+            http://127.0.0.1:3000/api/session/verify-otp > /tmp/verify-otp.json
+
+          curl --fail --silent -b /tmp/customer-cookies.txt \
+            http://127.0.0.1:3000/api/session/me > /tmp/me.json
+
+          node <<'NODE'
+          const fs = require('node:fs');
+          const verified = JSON.parse(fs.readFileSync('/tmp/verify-otp.json', 'utf8'));
+          const me = JSON.parse(fs.readFileSync('/tmp/me.json', 'utf8'));
+          const cookies = fs.readFileSync('/tmp/customer-cookies.txt', 'utf8');
+
+          if (verified.user?.role !== 'CUSTOMER') throw new Error('BFF verify did not return customer');
+          if (me.user?.phone !== '+989114444444') throw new Error('BFF /me session failed');
+          if (!cookies.includes('bd_access') || !cookies.includes('bd_refresh')) {
+            throw new Error('HttpOnly session cookies were not persisted');
+          }
+          NODE
