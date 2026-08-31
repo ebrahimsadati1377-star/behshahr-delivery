@@ -5,6 +5,7 @@ import { RoutingProvider } from '../geo/routing.provider';
 import { ServiceAreaService } from '../geo/service-area.service';
 import { RedisService } from '../redis/redis.service';
 import { CreateQuoteDto } from './dto/create-quote.dto';
+import { AddressSnapshot, LockedQuote } from './quote.types';
 
 const QUOTE_TTL_SECONDS = 10 * 60;
 
@@ -35,13 +36,15 @@ export class QuotesService {
       throw new NotFoundException('Dropoff address not found');
     }
 
+    const pickupSnapshot = this.addressSnapshot(pickup);
+    const dropoffSnapshot = this.addressSnapshot(dropoff);
     const pickupCoordinate = {
-      latitude: Number(pickup.latitude),
-      longitude: Number(pickup.longitude),
+      latitude: pickupSnapshot.latitude,
+      longitude: pickupSnapshot.longitude,
     };
     const dropoffCoordinate = {
-      latitude: Number(dropoff.latitude),
-      longitude: Number(dropoff.longitude),
+      latitude: dropoffSnapshot.latitude,
+      longitude: dropoffSnapshot.longitude,
     };
 
     this.serviceArea.assertWithinServiceArea(pickupCoordinate, 'Pickup');
@@ -55,11 +58,13 @@ export class QuotesService {
     const priceToman = this.calculatePrice(route.distanceMeters, pricingRule);
     const quoteId = randomUUID();
     const expiresAt = new Date(Date.now() + QUOTE_TTL_SECONDS * 1000);
-    const lockedQuote = {
+    const lockedQuote: LockedQuote = {
       quoteId,
       userId,
       pickupAddressId: pickup.id,
       dropoffAddressId: dropoff.id,
+      pickupSnapshot,
+      dropoffSnapshot,
       vehicleType: dto.vehicleType,
       distanceMeters: route.distanceMeters,
       estimatedDurationSeconds: route.durationSeconds,
@@ -70,16 +75,71 @@ export class QuotesService {
     };
 
     await this.redis.setEx(
-      `quotes:${quoteId}`,
+      this.quoteKey(quoteId),
       QUOTE_TTL_SECONDS,
       JSON.stringify(lockedQuote),
     );
 
     return {
-      ...lockedQuote,
+      quoteId,
+      pickupAddressId: pickup.id,
+      dropoffAddressId: dropoff.id,
+      vehicleType: dto.vehicleType,
+      distanceMeters: route.distanceMeters,
+      estimatedDurationSeconds: route.durationSeconds,
+      priceToman,
       currency: 'TOMAN',
+      pricingRuleId: pricingRule.id,
+      routingMode: route.mode,
+      expiresAt: expiresAt.toISOString(),
       expiresInSeconds: QUOTE_TTL_SECONDS,
     };
+  }
+
+  async consumeLockedQuote(userId: string, quoteId: string): Promise<LockedQuote> {
+    const key = this.quoteKey(quoteId);
+    const visibleRaw = await this.redis.get(key);
+
+    if (!visibleRaw) {
+      throw new NotFoundException('Quote not found or expired');
+    }
+
+    const visibleQuote = this.parseLockedQuote(visibleRaw);
+
+    if (visibleQuote.userId !== userId) {
+      throw new NotFoundException('Quote not found or expired');
+    }
+
+    const consumedRaw = await this.redis.getAndDelete(key);
+
+    if (!consumedRaw) {
+      throw new NotFoundException('Quote was already used or expired');
+    }
+
+    const consumedQuote = this.parseLockedQuote(consumedRaw);
+
+    if (
+      consumedQuote.userId !== userId ||
+      new Date(consumedQuote.expiresAt).getTime() <= Date.now()
+    ) {
+      throw new NotFoundException('Quote not found or expired');
+    }
+
+    return consumedQuote;
+  }
+
+  async restoreLockedQuote(quote: LockedQuote): Promise<void> {
+    const ttlSeconds = Math.floor(
+      (new Date(quote.expiresAt).getTime() - Date.now()) / 1000,
+    );
+
+    if (ttlSeconds > 0) {
+      await this.redis.setIfAbsent(
+        this.quoteKey(quote.quoteId),
+        JSON.stringify(quote),
+        ttlSeconds,
+      );
+    }
   }
 
   private async findPricingRule(vehicleType: 'MOTORBIKE' | 'CAR') {
@@ -127,5 +187,33 @@ export class QuotesService {
     const subtotal = Math.max(minimumFare, baseFare + distanceFare);
 
     return Math.ceil(subtotal * surgeMultiplier);
+  }
+
+  private addressSnapshot(address: {
+    title: string;
+    formattedAddress: string;
+    latitude: unknown;
+    longitude: unknown;
+    details: string | null;
+  }): AddressSnapshot {
+    return {
+      title: address.title,
+      formattedAddress: address.formattedAddress,
+      latitude: Number(address.latitude),
+      longitude: Number(address.longitude),
+      details: address.details,
+    };
+  }
+
+  private quoteKey(quoteId: string): string {
+    return `quotes:${quoteId}`;
+  }
+
+  private parseLockedQuote(raw: string): LockedQuote {
+    try {
+      return JSON.parse(raw) as LockedQuote;
+    } catch {
+      throw new NotFoundException('Quote not found or expired');
+    }
   }
 }

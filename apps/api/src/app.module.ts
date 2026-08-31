@@ -4,6 +4,7 @@ import { AuthModule } from './auth/auth.module';
 import { DatabaseModule } from './database/database.module';
 import { GeoModule } from './geo/geo.module';
 import { HealthController } from './health.controller';
+import { OrdersModule } from './orders/orders.module';
 import { QuotesModule } from './quotes/quotes.module';
 import { RedisModule } from './redis/redis.module';
 
@@ -15,6 +16,7 @@ import { RedisModule } from './redis/redis.module';
     GeoModule,
     AddressesModule,
     QuotesModule,
+    OrdersModule,
   ],
   controllers: [HealthController],
 })

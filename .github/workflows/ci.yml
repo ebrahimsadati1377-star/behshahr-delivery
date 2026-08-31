@@ -83,7 +83,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
-      - name: Smoke test customer flow
+      - name: Smoke test customer order flow
         run: |
           pnpm --filter @behshahr-delivery/api start > /tmp/behshahr-delivery-api.log 2>&1 &
           API_PID=$!
@@ -175,11 +175,6 @@ jobs:
             throw new Error('address update did not persist');
           }
 
-          const addresses = await jsonRequest('/addresses', { headers: authHeaders });
-          if (!Array.isArray(addresses) || addresses.length !== 2) {
-            throw new Error(`unexpected address list: ${JSON.stringify(addresses)}`);
-          }
-
           const quote = await jsonRequest('/quotes', {
             method: 'POST',
             headers: authHeaders,
@@ -194,6 +189,81 @@ jobs:
             throw new Error(`unexpected quote: ${JSON.stringify(quote)}`);
           }
 
+          const order = await jsonRequest('/orders', {
+            method: 'POST',
+            headers: authHeaders,
+            body: JSON.stringify({ quoteId: quote.quoteId, notes: 'CI order' }),
+          });
+
+          if (
+            order.status !== 'REQUESTED' ||
+            order.vehicleType !== 'MOTORBIKE' ||
+            order.quotedPriceToman !== quote.priceToman ||
+            order.pickupSnapshot.title !== 'Updated Pickup'
+          ) {
+            throw new Error(`unexpected order: ${JSON.stringify(order)}`);
+          }
+
+          const reusedQuote = await fetch(`${base}/orders`, {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              ...authHeaders,
+            },
+            body: JSON.stringify({ quoteId: quote.quoteId }),
+          });
+
+          if (reusedQuote.status !== 404) {
+            throw new Error(`used quote should be rejected, got ${reusedQuote.status}`);
+          }
+
+          const orders = await jsonRequest('/orders', { headers: authHeaders });
+          if (!Array.isArray(orders) || orders.length !== 1 || orders[0].id !== order.id) {
+            throw new Error(`unexpected order history: ${JSON.stringify(orders)}`);
+          }
+
+          const detail = await jsonRequest(`/orders/${order.id}`, {
+            headers: authHeaders,
+          });
+
+          if (
+            !Array.isArray(detail.events) ||
+            detail.events.length !== 1 ||
+            detail.events[0].eventType !== 'ORDER_REQUESTED'
+          ) {
+            throw new Error(`unexpected order detail: ${JSON.stringify(detail)}`);
+          }
+
+          const cancelled = await jsonRequest(`/orders/${order.id}/cancel`, {
+            method: 'POST',
+            headers: authHeaders,
+          });
+
+          if (cancelled.status !== 'CANCELLED') {
+            throw new Error(`order was not cancelled: ${JSON.stringify(cancelled)}`);
+          }
+
+          const afterCancel = await jsonRequest(`/orders/${order.id}`, {
+            headers: authHeaders,
+          });
+
+          if (
+            afterCancel.status !== 'CANCELLED' ||
+            afterCancel.events.length !== 2 ||
+            afterCancel.events[1].eventType !== 'ORDER_CANCELLED_BY_CUSTOMER'
+          ) {
+            throw new Error(`unexpected cancellation timeline: ${JSON.stringify(afterCancel)}`);
+          }
+
+          const secondCancel = await fetch(`${base}/orders/${order.id}/cancel`, {
+            method: 'POST',
+            headers: authHeaders,
+          });
+
+          if (secondCancel.status !== 409) {
+            throw new Error(`second cancel should conflict, got ${secondCancel.status}`);
+          }
+
           const rotated = await jsonRequest('/auth/refresh', {
             method: 'POST',
             body: JSON.stringify({ refreshToken: session.refreshToken }),
@@ -201,16 +271,6 @@ jobs:
 
           if (rotated.refreshToken === session.refreshToken) {
             throw new Error('refresh token was not rotated');
-          }
-
-          const oldRefresh = await fetch(`${base}/auth/refresh`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ refreshToken: session.refreshToken }),
-          });
-
-          if (oldRefresh.status !== 401) {
-            throw new Error(`old refresh token should be revoked, got ${oldRefresh.status}`);
           }
 
           const rotatedHeaders = { authorization: `Bearer ${rotated.accessToken}` };

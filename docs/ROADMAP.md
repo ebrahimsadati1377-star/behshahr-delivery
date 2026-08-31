@@ -39,11 +39,11 @@ Goal: make the repository safe and predictable for parallel development.
 - [x] address CRUD
 - [x] quote endpoint
 - [x] configurable service-area validation
-- [x] server-side locked quote with expiry
+- [x] server-side locked quote with expiry and single-use consumption
 - [ ] production map/routing provider
-- [ ] order request endpoint
-- [ ] order history/details
-- [ ] cancellation rules
+- [x] order request endpoint from quoteId
+- [x] order history/details with event timeline
+- [x] customer cancellation before courier assignment
 - [ ] customer PWA screens for the complete flow
 
 ## Phase 4 — Courier Flow
