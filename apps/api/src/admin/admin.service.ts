@@ -1,5 +1,6 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
+import { Prisma } from '../generated/prisma/client';
 import { AssignOrderDto } from './dto/assign-order.dto';
 
 @Injectable()
@@ -180,7 +181,7 @@ export class AdminService {
     });
   }
 
-  private async orderInTransaction(tx: any, orderId: string) {
+  private async orderInTransaction(tx: Prisma.TransactionClient, orderId: string) {
     const order = await tx.order.findUniqueOrThrow({
       where: { id: orderId },
       include: {
@@ -191,7 +192,35 @@ export class AdminService {
     return this.serializeOrder(order);
   }
 
-  private serializeOrder(order: any) {
+  private serializeOrder(order: {
+    id: string;
+    publicCode: string;
+    customerId: string;
+    customer?: { id: string; phone: string } | null;
+    courierId: string | null;
+    courier?: {
+      id: string;
+      userId: string;
+      vehicleType: string;
+      status: string;
+      user?: { phone: string } | null;
+    } | null;
+    vehicleType: string;
+    pickupSnapshot: unknown;
+    dropoffSnapshot: unknown;
+    distanceMeters: number;
+    estimatedDurationSeconds: number | null;
+    quotedPrice: bigint;
+    finalPrice: bigint | null;
+    status: string;
+    notes: string | null;
+    createdAt: Date;
+    assignedAt: Date | null;
+    pickedUpAt: Date | null;
+    deliveredAt: Date | null;
+    cancelledAt: Date | null;
+    updatedAt: Date;
+  }) {
     return {
       id: order.id,
       publicCode: order.publicCode,
