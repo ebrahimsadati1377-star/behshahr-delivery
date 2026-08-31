@@ -9,19 +9,19 @@ Goal: make the repository safe and predictable for parallel development.
 - [x] Codex instructions (`AGENTS.md`)
 - [x] data model contract
 - [x] Turbo task graph
-- [ ] local Docker stack
-- [ ] CI for lint/typecheck/test/build
+- [x] local Docker stack
+- [x] CI for lint/typecheck/test/build
 
 ## Phase 1 — API Foundation
 
-- NestJS application
-- configuration validation
-- PostgreSQL/PostGIS connection
-- Prisma schema and first migration
-- Redis connection
-- health endpoint
-- structured logging
-- global validation/error format
+- [x] NestJS application
+- [ ] configuration validation
+- [x] PostgreSQL/PostGIS connection foundation
+- [x] Prisma schema and first migration
+- [ ] Redis connection
+- [x] health endpoint
+- [ ] structured logging
+- [ ] global validation/error format
 
 Definition of done:
 - API starts locally with one command
