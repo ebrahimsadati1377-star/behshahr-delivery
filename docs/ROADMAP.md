@@ -59,10 +59,11 @@ Goal: make the repository safe and predictable for parallel development.
 
 ## Phase 5 — Admin Operations
 
-- [ ] live order board
-- [ ] courier availability list/map
-- [ ] manual assignment and reassignment
-- [ ] order event timeline
+- [x] order board API
+- [x] courier availability/location API
+- [x] manual assignment and reassignment
+- [x] order event timeline
+- [ ] admin web dashboard
 - [ ] pricing-rule management
 - [ ] service-zone management
 
