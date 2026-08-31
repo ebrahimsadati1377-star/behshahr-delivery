@@ -82,14 +82,21 @@ jobs:
           pnpm --filter @behshahr-delivery/courier start > /tmp/courier-web.log 2>&1 &
           WEB_PID=$!
           trap 'kill $API_PID $WEB_PID || true' EXIT
-          for port in 4000 3001; do
-            READY=0
-            for attempt in {1..30}; do
-              if curl --fail --silent http://127.0.0.1:$port/ > /dev/null; then READY=1; break; fi
-              sleep 1
-            done
-            if [ "$READY" -ne 1 ]; then cat /tmp/courier-api.log; cat /tmp/courier-web.log; exit 1; fi
+
+          API_READY=0
+          WEB_READY=0
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4000/api/health > /dev/null; then API_READY=1; fi
+            if curl --fail --silent http://127.0.0.1:3001/ > /dev/null; then WEB_READY=1; fi
+            if [ "$API_READY" -eq 1 ] && [ "$WEB_READY" -eq 1 ]; then break; fi
+            sleep 1
           done
+          if [ "$API_READY" -ne 1 ] || [ "$WEB_READY" -ne 1 ]; then
+            cat /tmp/courier-api.log
+            cat /tmp/courier-web.log
+            exit 1
+          fi
+
           node <<'NODE'
           const api = 'http://127.0.0.1:4000/api';
           const web = 'http://127.0.0.1:3001';
@@ -104,12 +111,16 @@ jobs:
             await json(`${api}/auth/request-otp`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({phone}) });
             return (await json(`${api}/auth/verify-otp`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({phone,code:'123456'}) })).body;
           }
+
           const customer = await apiLogin('+989112222222');
           const auth = { authorization:`Bearer ${customer.accessToken}`, 'content-type':'application/json' };
           const pickup = (await json(`${api}/addresses`, { method:'POST', headers:auth, body:JSON.stringify({title:'مبدا تست',formattedAddress:'بهشهر - مبدا تست',latitude:36.70,longitude:53.55}) })).body;
           const dropoff = (await json(`${api}/addresses`, { method:'POST', headers:auth, body:JSON.stringify({title:'مقصد تست',formattedAddress:'بهشهر - مقصد تست',latitude:36.71,longitude:53.56}) })).body;
           const quote = (await json(`${api}/quotes`, { method:'POST', headers:auth, body:JSON.stringify({pickupAddressId:pickup.id,dropoffAddressId:dropoff.id,vehicleType:'MOTORBIKE'}) })).body;
           const order = (await json(`${api}/orders`, { method:'POST', headers:auth, body:JSON.stringify({quoteId:quote.quoteId,notes:'Courier PWA smoke'}) })).body;
+
+          await json(`${web}/api/session/request-otp`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({phone:'+989112222222'}) });
+          await json(`${web}/api/session/verify-otp`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({phone:'+989112222222',code:'123456'}) }, 403);
 
           let cookie = '';
           function absorb(response) {
@@ -121,6 +132,7 @@ jobs:
           const verified = await json(`${web}/api/session/verify-otp`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({phone:'+989111111111',code:'123456'}) });
           absorb(verified.response);
           if (!cookie) throw new Error('courier session cookie missing');
+
           const webHeaders = { cookie, 'content-type':'application/json' };
           const profile = (await json(`${web}/api/courier/profile`, { headers:webHeaders })).body;
           if (profile.status !== 'OFFLINE') throw new Error(`unexpected courier profile ${JSON.stringify(profile)}`);
