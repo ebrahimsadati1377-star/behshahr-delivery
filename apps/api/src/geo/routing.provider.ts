@@ -1,9 +1,11 @@
 import { Coordinate } from './geo.utils';
 
+export type RoutingMode = 'APPROXIMATE' | 'APPROXIMATE_FALLBACK' | 'NESHAN';
+
 export interface RouteEstimate {
   distanceMeters: number;
   durationSeconds: number;
-  mode: 'APPROXIMATE';
+  mode: RoutingMode;
 }
 
 export abstract class RoutingProvider {
