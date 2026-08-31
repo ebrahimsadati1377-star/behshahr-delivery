@@ -1,0 +1,139 @@
+name: Temporary Demo Preview
+
+on:
+  push:
+    branches: [codex/demo-preview]
+  workflow_dispatch:
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 130
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/behshahr_delivery?schema=public
+      REDIS_URL: redis://localhost:6379
+      API_PORT: 4000
+      API_INTERNAL_URL: http://127.0.0.1:4000/api
+      NODE_ENV: production
+      SMS_PROVIDER: console
+      DEV_OTP_CODE: "123456"
+      OTP_SECRET: demo-only-otp-secret-not-for-production
+      JWT_ACCESS_SECRET: demo-only-access-secret-not-for-production
+      JWT_REFRESH_SECRET: demo-only-refresh-secret-not-for-production
+      SERVICE_CENTER_LAT: "36.700000"
+      SERVICE_CENTER_LNG: "53.550000"
+      SERVICE_RADIUS_METERS: "20000"
+      ROUTING_PROVIDER: approximate
+      ROUTE_DISTANCE_FACTOR: "1.25"
+      ROUTE_AVG_SPEED_KMH: "25"
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: behshahr_delivery
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d behshahr_delivery"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm --filter @behshahr-delivery/api prisma:migrate:deploy
+
+      - name: Seed demo pricing and operators
+        run: |
+          pnpm --filter @behshahr-delivery/api exec node <<'NODE'
+          const { Client } = require('pg');
+          (async () => {
+            const db = new Client({ connectionString: process.env.DATABASE_URL });
+            await db.connect();
+            await db.query(`
+              INSERT INTO "pricing_rules" ("id","vehicle_type","base_fare","included_distance_meters","per_km_fare","minimum_fare","surge_multiplier","is_active","created_at","updated_at") VALUES
+                ('00000000-0000-4000-8000-000000000801','MOTORBIKE',50000,1000,15000,50000,1.00,true,NOW(),NOW()),
+                ('00000000-0000-4000-8000-000000000802','CAR',80000,1000,22000,80000,1.00,true,NOW(),NOW());
+              INSERT INTO "users" ("id","phone","role","status","created_at","updated_at") VALUES
+                ('00000000-0000-4000-8000-000000000810','+989113333333','ADMIN','ACTIVE',NOW(),NOW()),
+                ('00000000-0000-4000-8000-000000000820','+989111111111','COURIER','ACTIVE',NOW(),NOW());
+              INSERT INTO "couriers" ("id","user_id","vehicle_type","status","last_latitude","last_longitude","last_seen_at","created_at","updated_at") VALUES
+                ('00000000-0000-4000-8000-000000000821','00000000-0000-4000-8000-000000000820','MOTORBIKE','AVAILABLE',36.7005,53.5505,NOW(),NOW(),NOW());
+            `);
+            await db.end();
+          })().catch((error) => { console.error(error); process.exit(1); });
+          NODE
+
+      - name: Build demo apps
+        run: |
+          pnpm --filter @behshahr-delivery/api build
+          pnpm --filter @behshahr-delivery/customer build
+          pnpm --filter @behshahr-delivery/courier build
+          pnpm --filter @behshahr-delivery/admin build
+
+      - name: Start demo services
+        run: |
+          pnpm --filter @behshahr-delivery/api start > /tmp/demo-api.log 2>&1 &
+          echo $! > /tmp/demo-api.pid
+          pnpm --filter @behshahr-delivery/customer start > /tmp/demo-customer.log 2>&1 &
+          echo $! > /tmp/demo-customer.pid
+          pnpm --filter @behshahr-delivery/courier start > /tmp/demo-courier.log 2>&1 &
+          echo $! > /tmp/demo-courier.pid
+          pnpm --filter @behshahr-delivery/admin start > /tmp/demo-admin.log 2>&1 &
+          echo $! > /tmp/demo-admin.pid
+
+          for attempt in {1..45}; do
+            API=0; CUSTOMER=0; COURIER=0; ADMIN=0
+            curl --fail --silent http://127.0.0.1:4000/api/health >/dev/null && API=1 || true
+            curl --fail --silent http://127.0.0.1:3000/ >/dev/null && CUSTOMER=1 || true
+            curl --fail --silent http://127.0.0.1:3001/ >/dev/null && COURIER=1 || true
+            curl --fail --silent http://127.0.0.1:3002/ >/dev/null && ADMIN=1 || true
+            if [ "$API" -eq 1 ] && [ "$CUSTOMER" -eq 1 ] && [ "$COURIER" -eq 1 ] && [ "$ADMIN" -eq 1 ]; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/demo-api.log /tmp/demo-customer.log /tmp/demo-courier.log /tmp/demo-admin.log
+          exit 1
+
+      - name: Open temporary public tunnels
+        run: |
+          curl -L --fail --retry 3 https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /tmp/cloudflared
+          chmod +x /tmp/cloudflared
+
+          /tmp/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:3000 > /tmp/tunnel-customer.log 2>&1 &
+          /tmp/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:3001 > /tmp/tunnel-courier.log 2>&1 &
+          /tmp/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:3002 > /tmp/tunnel-admin.log 2>&1 &
+
+          for attempt in {1..45}; do
+            CUSTOMER_URL=$(grep -Eo 'https://[-a-z0-9]+\.trycloudflare\.com' /tmp/tunnel-customer.log | head -1 || true)
+            COURIER_URL=$(grep -Eo 'https://[-a-z0-9]+\.trycloudflare\.com' /tmp/tunnel-courier.log | head -1 || true)
+            ADMIN_URL=$(grep -Eo 'https://[-a-z0-9]+\.trycloudflare\.com' /tmp/tunnel-admin.log | head -1 || true)
+            if [ -n "$CUSTOMER_URL" ] && [ -n "$COURIER_URL" ] && [ -n "$ADMIN_URL" ]; then
+              echo "DEMO_CUSTOMER_URL=$CUSTOMER_URL"
+              echo "DEMO_COURIER_URL=$COURIER_URL"
+              echo "DEMO_ADMIN_URL=$ADMIN_URL"
+              echo "DEMO_OTP=123456"
+              echo "DEMO_COURIER_PHONE=+989111111111"
+              echo "DEMO_ADMIN_PHONE=+989113333333"
+              echo "Customer login: use any unused Iranian mobile number."
+              break
+            fi
+            sleep 1
+          done
+
+          if [ -z "$CUSTOMER_URL" ] || [ -z "$COURIER_URL" ] || [ -z "$ADMIN_URL" ]; then
+            cat /tmp/tunnel-customer.log /tmp/tunnel-courier.log /tmp/tunnel-admin.log
+            exit 1
+          fi
+
+          # Keep the temporary client demo available for this workflow run.
+          sleep 7200
