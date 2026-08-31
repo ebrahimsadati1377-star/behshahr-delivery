@@ -84,13 +84,9 @@ jobs:
       - name: Start demo services
         run: |
           pnpm --filter @behshahr-delivery/api start > /tmp/demo-api.log 2>&1 &
-          echo $! > /tmp/demo-api.pid
           pnpm --filter @behshahr-delivery/customer start > /tmp/demo-customer.log 2>&1 &
-          echo $! > /tmp/demo-customer.pid
           pnpm --filter @behshahr-delivery/courier start > /tmp/demo-courier.log 2>&1 &
-          echo $! > /tmp/demo-courier.pid
           pnpm --filter @behshahr-delivery/admin start > /tmp/demo-admin.log 2>&1 &
-          echo $! > /tmp/demo-admin.pid
 
           for attempt in {1..45}; do
             API=0; CUSTOMER=0; COURIER=0; ADMIN=0
@@ -117,16 +113,7 @@ jobs:
             CUSTOMER_URL=$(grep -Eo 'https://[-a-z0-9]+\.trycloudflare\.com' /tmp/tunnel-customer.log | head -1 || true)
             COURIER_URL=$(grep -Eo 'https://[-a-z0-9]+\.trycloudflare\.com' /tmp/tunnel-courier.log | head -1 || true)
             ADMIN_URL=$(grep -Eo 'https://[-a-z0-9]+\.trycloudflare\.com' /tmp/tunnel-admin.log | head -1 || true)
-            if [ -n "$CUSTOMER_URL" ] && [ -n "$COURIER_URL" ] && [ -n "$ADMIN_URL" ]; then
-              echo "DEMO_CUSTOMER_URL=$CUSTOMER_URL"
-              echo "DEMO_COURIER_URL=$COURIER_URL"
-              echo "DEMO_ADMIN_URL=$ADMIN_URL"
-              echo "DEMO_OTP=123456"
-              echo "DEMO_COURIER_PHONE=+989111111111"
-              echo "DEMO_ADMIN_PHONE=+989113333333"
-              echo "Customer login: use any unused Iranian mobile number."
-              break
-            fi
+            if [ -n "$CUSTOMER_URL" ] && [ -n "$COURIER_URL" ] && [ -n "$ADMIN_URL" ]; then break; fi
             sleep 1
           done
 
@@ -135,5 +122,23 @@ jobs:
             exit 1
           fi
 
-          # Keep the temporary client demo available for this workflow run.
-          sleep 7200
+          cat > /tmp/demo-links.txt <<EOF
+          CUSTOMER_URL=$CUSTOMER_URL
+          COURIER_URL=$COURIER_URL
+          ADMIN_URL=$ADMIN_URL
+          OTP=123456
+          COURIER_PHONE=+989111111111
+          ADMIN_PHONE=+989113333333
+          CUSTOMER_LOGIN=Use any unused Iranian mobile number
+          EOF
+          cat /tmp/demo-links.txt
+
+      - name: Publish demo links
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-live-links
+          path: /tmp/demo-links.txt
+          retention-days: 1
+
+      - name: Keep demo online
+        run: sleep 7200
