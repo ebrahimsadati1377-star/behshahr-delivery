@@ -44,7 +44,12 @@ Goal: make the repository safe and predictable for parallel development.
 - [x] order request endpoint from quoteId
 - [x] order history/details with event timeline
 - [x] customer cancellation before courier assignment
-- [ ] customer PWA screens for the complete flow
+- [x] mobile-first RTL PWA shell
+- [x] secure OTP login via Next.js BFF + HttpOnly cookies
+- [x] installable manifest/service worker foundation
+- [ ] customer address screens
+- [ ] quote + order creation screens
+- [ ] order history/tracking screens
 
 ## Phase 4 — Courier Flow
 
