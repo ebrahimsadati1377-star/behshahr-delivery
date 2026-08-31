@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
@@ -50,21 +51,19 @@ export default function HomePage() {
       </div>
 
       <div className="grid">
-        <button className="primary" type="button" disabled>
-          ثبت ارسال جدید — مرحله بعد
-        </button>
+        <Link className="primary link-button" href="/new">ثبت ارسال جدید</Link>
 
-        <div className="action-card">
+        <Link className="action-card linked-card" href="/orders">
           <strong>سفارش‌های من</strong>
-          <span>تاریخچه و وضعیت ارسال‌ها در مرحله بعد به API سفارش متصل می‌شود.</span>
-        </div>
-        <div className="action-card">
+          <span>وضعیت ارسال‌های فعال و تاریخچه سفارش‌ها را ببین.</span>
+        </Link>
+        <Link className="action-card linked-card" href="/addresses">
           <strong>آدرس‌ها</strong>
-          <span>مبدا و مقصدهای ذخیره‌شده از API آدرس‌ها قابل مدیریت خواهند بود.</span>
-        </div>
+          <span>مبدا و مقصدهای ذخیره‌شده را اضافه یا ویرایش کن.</span>
+        </Link>
         <div className="action-card">
-          <strong>امنیت Session</strong>
-          <span>توکن‌ها در cookieهای HttpOnly هستند و refresh به‌صورت server-side انجام می‌شود.</span>
+          <strong>ورود امن</strong>
+          <span>نشست ورود با cookieهای HttpOnly نگهداری و خودکار تمدید می‌شود.</span>
         </div>
       </div>
 
