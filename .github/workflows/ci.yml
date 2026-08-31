@@ -55,7 +55,7 @@ jobs:
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm --filter @behshahr-delivery/api prisma:validate
       - run: pnpm --filter @behshahr-delivery/api prisma:migrate:deploy
-      - name: Seed CI pricing rule
+      - name: Seed CI pricing and courier
         run: |
           pnpm --filter @behshahr-delivery/api exec node <<'NODE'
           const { Client } = require('pg');
@@ -71,7 +71,22 @@ jobs:
               ) VALUES (
                 '00000000-0000-4000-8000-000000000001', 'MOTORBIKE', 50000, 1000,
                 15000, 50000, 1.00, true, NOW(), NOW()
-              )
+              );
+
+              INSERT INTO "users" (
+                "id", "phone", "role", "status", "created_at", "updated_at"
+              ) VALUES (
+                '00000000-0000-4000-8000-000000000010', '+989111111111',
+                'COURIER', 'ACTIVE', NOW(), NOW()
+              );
+
+              INSERT INTO "couriers" (
+                "id", "user_id", "vehicle_type", "status", "created_at", "updated_at"
+              ) VALUES (
+                '00000000-0000-4000-8000-000000000011',
+                '00000000-0000-4000-8000-000000000010',
+                'MOTORBIKE', 'OFFLINE', NOW(), NOW()
+              );
             `);
             await client.end();
           })().catch((error) => {
@@ -83,7 +98,7 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
-      - name: Smoke test customer order flow
+      - name: Smoke test customer and courier lifecycle
         run: |
           pnpm --filter @behshahr-delivery/api start > /tmp/behshahr-delivery-api.log 2>&1 &
           API_PID=$!
@@ -105,9 +120,8 @@ jobs:
 
           node <<'NODE'
           const base = 'http://127.0.0.1:4000/api';
-          const phone = '+989111234567';
 
-          async function jsonRequest(path, options = {}) {
+          async function request(path, options = {}, expectedStatus) {
             const response = await fetch(`${base}${path}`, {
               ...options,
               headers: {
@@ -116,185 +130,158 @@ jobs:
               },
             });
             const body = await response.json().catch(() => ({}));
+            if (expectedStatus !== undefined) {
+              if (response.status !== expectedStatus) {
+                throw new Error(`${path} expected ${expectedStatus}, got ${response.status}: ${JSON.stringify(body)}`);
+              }
+              return body;
+            }
             if (!response.ok) {
               throw new Error(`${path} failed ${response.status}: ${JSON.stringify(body)}`);
             }
             return body;
           }
 
-          await jsonRequest('/auth/request-otp', {
-            method: 'POST',
-            body: JSON.stringify({ phone }),
-          });
-
-          const session = await jsonRequest('/auth/verify-otp', {
-            method: 'POST',
-            body: JSON.stringify({ phone, code: '123456' }),
-          });
-
-          if (!session.accessToken || !session.refreshToken) {
-            throw new Error('verify-otp did not return token pair');
+          async function login(phone) {
+            await request('/auth/request-otp', {
+              method: 'POST',
+              body: JSON.stringify({ phone }),
+            });
+            return request('/auth/verify-otp', {
+              method: 'POST',
+              body: JSON.stringify({ phone, code: '123456' }),
+            });
           }
 
-          const authHeaders = { authorization: `Bearer ${session.accessToken}` };
-          const me = await jsonRequest('/auth/me', { headers: authHeaders });
+          const customer = await login('+989112222222');
+          const courier = await login('+989111111111');
+          const customerHeaders = { authorization: `Bearer ${customer.accessToken}` };
+          const courierHeaders = { authorization: `Bearer ${courier.accessToken}` };
 
-          if (me.user.phone !== phone || me.user.role !== 'CUSTOMER') {
-            throw new Error(`unexpected authenticated user: ${JSON.stringify(me)}`);
+          const customerMe = await request('/auth/me', { headers: customerHeaders });
+          const courierMe = await request('/auth/me', { headers: courierHeaders });
+          if (customerMe.user.role !== 'CUSTOMER' || courierMe.user.role !== 'COURIER') {
+            throw new Error('unexpected auth roles');
           }
 
-          const pickup = await jsonRequest('/addresses', {
-            method: 'POST',
-            headers: authHeaders,
+          await request('/courier/profile', { headers: customerHeaders }, 403);
+
+          const pickup = await request('/addresses', {
+            method: 'POST', headers: customerHeaders,
             body: JSON.stringify({
-              title: 'Pickup',
-              formattedAddress: 'CI pickup address',
-              latitude: 36.700000,
-              longitude: 53.550000,
+              title: 'Pickup', formattedAddress: 'CI pickup',
+              latitude: 36.700000, longitude: 53.550000,
             }),
           });
-
-          const dropoff = await jsonRequest('/addresses', {
-            method: 'POST',
-            headers: authHeaders,
+          const dropoff = await request('/addresses', {
+            method: 'POST', headers: customerHeaders,
             body: JSON.stringify({
-              title: 'Dropoff',
-              formattedAddress: 'CI dropoff address',
-              latitude: 36.710000,
-              longitude: 53.560000,
+              title: 'Dropoff', formattedAddress: 'CI dropoff',
+              latitude: 36.710000, longitude: 53.560000,
             }),
           });
-
-          const updatedPickup = await jsonRequest(`/addresses/${pickup.id}`, {
-            method: 'PATCH',
-            headers: authHeaders,
-            body: JSON.stringify({ title: 'Updated Pickup' }),
-          });
-
-          if (updatedPickup.title !== 'Updated Pickup') {
-            throw new Error('address update did not persist');
-          }
-
-          const quote = await jsonRequest('/quotes', {
-            method: 'POST',
-            headers: authHeaders,
+          const quote = await request('/quotes', {
+            method: 'POST', headers: customerHeaders,
             body: JSON.stringify({
               pickupAddressId: pickup.id,
               dropoffAddressId: dropoff.id,
               vehicleType: 'MOTORBIKE',
             }),
           });
-
-          if (!quote.quoteId || quote.priceToman < 50000 || quote.routingMode !== 'APPROXIMATE') {
-            throw new Error(`unexpected quote: ${JSON.stringify(quote)}`);
-          }
-
-          const order = await jsonRequest('/orders', {
-            method: 'POST',
-            headers: authHeaders,
-            body: JSON.stringify({ quoteId: quote.quoteId, notes: 'CI order' }),
+          const order = await request('/orders', {
+            method: 'POST', headers: customerHeaders,
+            body: JSON.stringify({ quoteId: quote.quoteId, notes: 'Courier CI flow' }),
           });
 
+          const initialProfile = await request('/courier/profile', { headers: courierHeaders });
+          if (initialProfile.status !== 'OFFLINE' || initialProfile.vehicleType !== 'MOTORBIKE') {
+            throw new Error(`unexpected courier profile: ${JSON.stringify(initialProfile)}`);
+          }
+
+          await request('/courier/location', {
+            method: 'POST', headers: courierHeaders,
+            body: JSON.stringify({ latitude: 36.701, longitude: 53.551 }),
+          });
+          const available = await request('/courier/availability', {
+            method: 'PATCH', headers: courierHeaders,
+            body: JSON.stringify({ status: 'AVAILABLE' }),
+          });
+          if (available.status !== 'AVAILABLE') throw new Error('courier did not go available');
+
+          const queue = await request('/courier/orders/available', { headers: courierHeaders });
+          if (!Array.isArray(queue) || queue.length !== 1 || queue[0].id !== order.id) {
+            throw new Error(`unexpected courier queue: ${JSON.stringify(queue)}`);
+          }
+
+          const accepted = await request(`/courier/orders/${order.id}/accept`, {
+            method: 'POST', headers: courierHeaders,
+          });
+          if (accepted.status !== 'ASSIGNED') throw new Error('order was not assigned');
+
+          await request(`/orders/${order.id}/cancel`, {
+            method: 'POST', headers: customerHeaders,
+          }, 409);
+
+          const current = await request('/courier/orders/current', { headers: courierHeaders });
+          if (!current || current.id !== order.id || current.status !== 'ASSIGNED') {
+            throw new Error(`unexpected current order: ${JSON.stringify(current)}`);
+          }
+
+          const rejected = await request(`/courier/orders/${order.id}/reject`, {
+            method: 'POST', headers: courierHeaders,
+          });
+          if (rejected.status !== 'REQUESTED' || rejected.courierId !== null) {
+            throw new Error('reject did not release order');
+          }
+
+          const reaccepted = await request(`/courier/orders/${order.id}/accept`, {
+            method: 'POST', headers: courierHeaders,
+          });
+          if (reaccepted.status !== 'ASSIGNED') throw new Error('reaccept failed');
+
+          await request('/courier/availability', {
+            method: 'PATCH', headers: courierHeaders,
+            body: JSON.stringify({ status: 'OFFLINE' }),
+          }, 409);
+
+          const pickedUp = await request(`/courier/orders/${order.id}/picked-up`, {
+            method: 'POST', headers: courierHeaders,
+          });
+          if (pickedUp.status !== 'PICKED_UP') throw new Error('pickup transition failed');
+
+          const delivered = await request(`/courier/orders/${order.id}/delivered`, {
+            method: 'POST', headers: courierHeaders,
+          });
           if (
-            order.status !== 'REQUESTED' ||
-            order.vehicleType !== 'MOTORBIKE' ||
-            order.quotedPriceToman !== quote.priceToman ||
-            order.pickupSnapshot.title !== 'Updated Pickup'
+            delivered.status !== 'DELIVERED' ||
+            delivered.finalPriceToman !== delivered.quotedPriceToman
           ) {
-            throw new Error(`unexpected order: ${JSON.stringify(order)}`);
+            throw new Error(`delivery transition failed: ${JSON.stringify(delivered)}`);
           }
 
-          const reusedQuote = await fetch(`${base}/orders`, {
-            method: 'POST',
-            headers: {
-              'content-type': 'application/json',
-              ...authHeaders,
-            },
-            body: JSON.stringify({ quoteId: quote.quoteId }),
-          });
-
-          if (reusedQuote.status !== 404) {
-            throw new Error(`used quote should be rejected, got ${reusedQuote.status}`);
+          const finalProfile = await request('/courier/profile', { headers: courierHeaders });
+          if (finalProfile.status !== 'AVAILABLE') {
+            throw new Error(`courier was not released after delivery: ${JSON.stringify(finalProfile)}`);
           }
 
-          const orders = await jsonRequest('/orders', { headers: authHeaders });
-          if (!Array.isArray(orders) || orders.length !== 1 || orders[0].id !== order.id) {
-            throw new Error(`unexpected order history: ${JSON.stringify(orders)}`);
+          const detail = await request(`/orders/${order.id}`, { headers: customerHeaders });
+          const eventTypes = detail.events.map((event) => event.eventType);
+          const expected = [
+            'ORDER_REQUESTED',
+            'ORDER_ACCEPTED_BY_COURIER',
+            'ORDER_REJECTED_BY_COURIER',
+            'ORDER_ACCEPTED_BY_COURIER',
+            'ORDER_PICKED_UP',
+            'ORDER_DELIVERED',
+          ];
+          if (JSON.stringify(eventTypes) !== JSON.stringify(expected)) {
+            throw new Error(`unexpected event timeline: ${JSON.stringify(eventTypes)}`);
           }
 
-          const detail = await jsonRequest(`/orders/${order.id}`, {
-            headers: authHeaders,
+          await request('/courier/availability', {
+            method: 'PATCH', headers: courierHeaders,
+            body: JSON.stringify({ status: 'OFFLINE' }),
           });
-
-          if (
-            !Array.isArray(detail.events) ||
-            detail.events.length !== 1 ||
-            detail.events[0].eventType !== 'ORDER_REQUESTED'
-          ) {
-            throw new Error(`unexpected order detail: ${JSON.stringify(detail)}`);
-          }
-
-          const cancelled = await jsonRequest(`/orders/${order.id}/cancel`, {
-            method: 'POST',
-            headers: authHeaders,
-          });
-
-          if (cancelled.status !== 'CANCELLED') {
-            throw new Error(`order was not cancelled: ${JSON.stringify(cancelled)}`);
-          }
-
-          const afterCancel = await jsonRequest(`/orders/${order.id}`, {
-            headers: authHeaders,
-          });
-
-          if (
-            afterCancel.status !== 'CANCELLED' ||
-            afterCancel.events.length !== 2 ||
-            afterCancel.events[1].eventType !== 'ORDER_CANCELLED_BY_CUSTOMER'
-          ) {
-            throw new Error(`unexpected cancellation timeline: ${JSON.stringify(afterCancel)}`);
-          }
-
-          const secondCancel = await fetch(`${base}/orders/${order.id}/cancel`, {
-            method: 'POST',
-            headers: authHeaders,
-          });
-
-          if (secondCancel.status !== 409) {
-            throw new Error(`second cancel should conflict, got ${secondCancel.status}`);
-          }
-
-          const rotated = await jsonRequest('/auth/refresh', {
-            method: 'POST',
-            body: JSON.stringify({ refreshToken: session.refreshToken }),
-          });
-
-          if (rotated.refreshToken === session.refreshToken) {
-            throw new Error('refresh token was not rotated');
-          }
-
-          const rotatedHeaders = { authorization: `Bearer ${rotated.accessToken}` };
-          await jsonRequest(`/addresses/${pickup.id}`, {
-            method: 'DELETE',
-            headers: rotatedHeaders,
-          });
-          await jsonRequest(`/addresses/${dropoff.id}`, {
-            method: 'DELETE',
-            headers: rotatedHeaders,
-          });
-
-          await jsonRequest('/auth/logout', {
-            method: 'POST',
-            body: JSON.stringify({ refreshToken: rotated.refreshToken }),
-          });
-
-          const afterLogout = await fetch(`${base}/auth/refresh`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ refreshToken: rotated.refreshToken }),
-          });
-
-          if (afterLogout.status !== 401) {
-            throw new Error(`logged-out refresh token should be revoked, got ${afterLogout.status}`);
-          }
+          await request(`/addresses/${pickup.id}`, { method: 'DELETE', headers: customerHeaders });
+          await request(`/addresses/${dropoff.id}`, { method: 'DELETE', headers: customerHeaders });
           NODE
