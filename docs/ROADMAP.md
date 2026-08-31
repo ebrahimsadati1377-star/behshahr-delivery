@@ -47,9 +47,11 @@ Goal: make the repository safe and predictable for parallel development.
 - [x] mobile-first RTL PWA shell
 - [x] secure OTP login via Next.js BFF + HttpOnly cookies
 - [x] installable manifest/service worker foundation
-- [ ] customer address screens
-- [ ] quote + order creation screens
-- [ ] order history/tracking screens
+- [x] customer address create/edit/delete screens with device geolocation helper
+- [x] quote + order creation screens
+- [x] order history/detail/cancel screens
+- [x] authenticated customer BFF proxy with transparent session refresh
+- [x] temporary 15-second order status polling until realtime is added
 
 ## Phase 4 — Courier Flow
 
@@ -75,7 +77,7 @@ Goal: make the repository safe and predictable for parallel development.
 ## Phase 6 — Realtime & Notifications
 
 - [ ] WebSocket order updates
-- [ ] customer tracking screen
+- [ ] realtime customer tracking screen
 - [ ] courier location updates
 - [ ] SMS/push adapter and critical notifications
 

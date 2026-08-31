@@ -19,6 +19,11 @@ jobs:
       OTP_SECRET: ci-otp-secret-change-me
       JWT_ACCESS_SECRET: ci-access-secret-change-me
       JWT_REFRESH_SECRET: ci-refresh-secret-change-me
+      SERVICE_CENTER_LAT: "36.700000"
+      SERVICE_CENTER_LNG: "53.550000"
+      SERVICE_RADIUS_METERS: "20000"
+      ROUTE_DISTANCE_FACTOR: "1.25"
+      ROUTE_AVG_SPEED_KMH: "25"
     services:
       postgres:
         image: postgis/postgis:16-3.4
@@ -50,10 +55,33 @@ jobs:
           node-version: 22
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm --filter @behshahr-delivery/api prisma:migrate:deploy
+      - name: Seed PWA pricing rule
+        run: |
+          pnpm --filter @behshahr-delivery/api exec node <<'NODE'
+          const { Client } = require('pg');
+          (async () => {
+            const client = new Client({ connectionString: process.env.DATABASE_URL });
+            await client.connect();
+            await client.query(`
+              INSERT INTO "pricing_rules" (
+                "id", "vehicle_type", "base_fare", "included_distance_meters",
+                "per_km_fare", "minimum_fare", "surge_multiplier", "is_active",
+                "created_at", "updated_at"
+              ) VALUES (
+                '00000000-0000-4000-8000-000000000101', 'MOTORBIKE', 50000, 1000,
+                15000, 50000, 1.00, true, NOW(), NOW()
+              )
+            `);
+            await client.end();
+          })().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE
       - run: pnpm --filter @behshahr-delivery/api build
       - run: pnpm --filter @behshahr-delivery/customer typecheck
       - run: pnpm --filter @behshahr-delivery/customer build
-      - name: Smoke test PWA and BFF auth
+      - name: Smoke test complete PWA customer flow
         run: |
           pnpm --filter @behshahr-delivery/api start > /tmp/api.log 2>&1 &
           API_PID=$!
@@ -86,15 +114,74 @@ jobs:
           curl --fail --silent -b /tmp/customer-cookies.txt \
             http://127.0.0.1:3000/api/session/me > /tmp/me.json
 
+          curl --fail --silent -b /tmp/customer-cookies.txt \
+            -H 'content-type: application/json' \
+            -d '{"title":"خانه","formattedAddress":"CI pickup","latitude":36.700000,"longitude":53.550000}' \
+            http://127.0.0.1:3000/api/customer/addresses > /tmp/pickup.json
+
+          curl --fail --silent -b /tmp/customer-cookies.txt \
+            -H 'content-type: application/json' \
+            -d '{"title":"مقصد","formattedAddress":"CI dropoff","latitude":36.710000,"longitude":53.560000}' \
+            http://127.0.0.1:3000/api/customer/addresses > /tmp/dropoff.json
+
+          PICKUP_ID=$(node -p "JSON.parse(require('fs').readFileSync('/tmp/pickup.json','utf8')).id")
+          DROPOFF_ID=$(node -p "JSON.parse(require('fs').readFileSync('/tmp/dropoff.json','utf8')).id")
+
+          curl --fail --silent -b /tmp/customer-cookies.txt \
+            http://127.0.0.1:3000/api/customer/addresses > /tmp/addresses.json
+
+          curl --fail --silent -b /tmp/customer-cookies.txt \
+            -H 'content-type: application/json' \
+            -d "{\"pickupAddressId\":\"$PICKUP_ID\",\"dropoffAddressId\":\"$DROPOFF_ID\",\"vehicleType\":\"MOTORBIKE\"}" \
+            http://127.0.0.1:3000/api/customer/quotes > /tmp/quote.json
+
+          QUOTE_ID=$(node -p "JSON.parse(require('fs').readFileSync('/tmp/quote.json','utf8')).quoteId")
+
+          curl --fail --silent -b /tmp/customer-cookies.txt \
+            -H 'content-type: application/json' \
+            -d "{\"quoteId\":\"$QUOTE_ID\",\"notes\":\"PWA full flow\"}" \
+            http://127.0.0.1:3000/api/customer/orders > /tmp/order.json
+
+          ORDER_ID=$(node -p "JSON.parse(require('fs').readFileSync('/tmp/order.json','utf8')).id")
+
+          curl --fail --silent -b /tmp/customer-cookies.txt \
+            http://127.0.0.1:3000/api/customer/orders > /tmp/orders.json
+
+          curl --fail --silent -b /tmp/customer-cookies.txt \
+            http://127.0.0.1:3000/api/customer/orders/$ORDER_ID > /tmp/order-detail.json
+
+          curl --fail --silent -b /tmp/customer-cookies.txt -X POST \
+            http://127.0.0.1:3000/api/customer/orders/$ORDER_ID/cancel > /tmp/cancelled.json
+
+          curl --fail --silent -b /tmp/customer-cookies.txt \
+            http://127.0.0.1:3000/home > /tmp/home.html
+          curl --fail --silent -b /tmp/customer-cookies.txt \
+            http://127.0.0.1:3000/addresses > /tmp/addresses.html
+          curl --fail --silent -b /tmp/customer-cookies.txt \
+            http://127.0.0.1:3000/new > /tmp/new.html
+          curl --fail --silent -b /tmp/customer-cookies.txt \
+            http://127.0.0.1:3000/orders > /tmp/orders.html
+
           node <<'NODE'
           const fs = require('node:fs');
-          const verified = JSON.parse(fs.readFileSync('/tmp/verify-otp.json', 'utf8'));
-          const me = JSON.parse(fs.readFileSync('/tmp/me.json', 'utf8'));
+          const read = (name) => JSON.parse(fs.readFileSync(`/tmp/${name}.json`, 'utf8'));
+          const verified = read('verify-otp');
+          const me = read('me');
+          const addresses = read('addresses');
+          const quote = read('quote');
+          const order = read('order');
+          const orders = read('orders');
+          const detail = read('order-detail');
+          const cancelled = read('cancelled');
           const cookies = fs.readFileSync('/tmp/customer-cookies.txt', 'utf8');
 
           if (verified.user?.role !== 'CUSTOMER') throw new Error('BFF verify did not return customer');
           if (me.user?.phone !== '+989114444444') throw new Error('BFF /me session failed');
-          if (!cookies.includes('bd_access') || !cookies.includes('bd_refresh')) {
-            throw new Error('HttpOnly session cookies were not persisted');
-          }
+          if (!cookies.includes('bd_access') || !cookies.includes('bd_refresh')) throw new Error('HttpOnly session cookies missing');
+          if (!Array.isArray(addresses) || addresses.length !== 2) throw new Error('Address BFF flow failed');
+          if (!quote.quoteId || quote.priceToman < 50000) throw new Error('Quote BFF flow failed');
+          if (!order.id || order.status !== 'REQUESTED') throw new Error('Order creation BFF flow failed');
+          if (!Array.isArray(orders) || orders.length !== 1 || orders[0].id !== order.id) throw new Error('Order history BFF flow failed');
+          if (!Array.isArray(detail.events) || detail.events[0]?.eventType !== 'ORDER_REQUESTED') throw new Error('Order detail BFF flow failed');
+          if (cancelled.status !== 'CANCELLED') throw new Error('Order cancel BFF flow failed');
           NODE
