@@ -48,12 +48,13 @@ Goal: make the repository safe and predictable for parallel development.
 
 ## Phase 4 — Courier Flow
 
-- [ ] courier profile and vehicle
-- [ ] online/offline availability
-- [ ] assignment queue
-- [ ] accept/reject
-- [ ] pickup and delivery state transitions
-- [ ] location heartbeat
+- [x] courier profile and vehicle
+- [x] online/offline availability
+- [x] assignment queue filtered by vehicle type
+- [x] concurrency-safe accept/reject
+- [x] pickup and delivery state transitions
+- [x] location heartbeat with PostGIS point
+- [x] courier/order audit events
 - [ ] courier PWA
 
 ## Phase 5 — Admin Operations

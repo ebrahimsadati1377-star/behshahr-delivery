@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AddressesModule } from './addresses/addresses.module';
 import { AuthModule } from './auth/auth.module';
+import { CouriersModule } from './couriers/couriers.module';
 import { DatabaseModule } from './database/database.module';
 import { GeoModule } from './geo/geo.module';
 import { HealthController } from './health.controller';
@@ -17,6 +18,7 @@ import { RedisModule } from './redis/redis.module';
     AddressesModule,
     QuotesModule,
     OrdersModule,
+    CouriersModule,
   ],
   controllers: [HealthController],
 })
