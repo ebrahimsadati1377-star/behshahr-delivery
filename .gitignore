@@ -9,6 +9,9 @@ build/
 coverage/
 .turbo/
 
+# generated
+apps/api/src/generated/prisma/
+
 # local env
 .env
 .env.*
