@@ -12,6 +12,12 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/behshahr_delivery?schema=public
       REDIS_URL: redis://localhost:6379
       API_PORT: 4000
+      NODE_ENV: test
+      SMS_PROVIDER: console
+      DEV_OTP_CODE: "123456"
+      OTP_SECRET: ci-otp-secret-change-me
+      JWT_ACCESS_SECRET: ci-access-secret-change-me
+      JWT_REFRESH_SECRET: ci-refresh-secret-change-me
     services:
       postgres:
         image: postgis/postgis:16-3.4
@@ -48,18 +54,98 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
-      - name: Smoke test API health
+      - name: Smoke test API health and auth
         run: |
           pnpm --filter @behshahr-delivery/api start > /tmp/behshahr-delivery-api.log 2>&1 &
           API_PID=$!
           trap 'kill $API_PID || true' EXIT
 
+          READY=0
           for attempt in {1..20}; do
-            if curl --fail --silent --show-error http://127.0.0.1:4000/api/health; then
-              exit 0
+            if curl --fail --silent http://127.0.0.1:4000/api/health > /dev/null; then
+              READY=1
+              break
             fi
             sleep 1
           done
 
-          cat /tmp/behshahr-delivery-api.log
-          exit 1
+          if [ "$READY" -ne 1 ]; then
+            cat /tmp/behshahr-delivery-api.log
+            exit 1
+          fi
+
+          node <<'NODE'
+          const base = 'http://127.0.0.1:4000/api';
+          const phone = '+989111234567';
+
+          async function jsonRequest(path, options = {}) {
+            const response = await fetch(`${base}${path}`, {
+              ...options,
+              headers: {
+                'content-type': 'application/json',
+                ...(options.headers ?? {}),
+              },
+            });
+            const body = await response.json().catch(() => ({}));
+            if (!response.ok) {
+              throw new Error(`${path} failed ${response.status}: ${JSON.stringify(body)}`);
+            }
+            return body;
+          }
+
+          await jsonRequest('/auth/request-otp', {
+            method: 'POST',
+            body: JSON.stringify({ phone }),
+          });
+
+          const session = await jsonRequest('/auth/verify-otp', {
+            method: 'POST',
+            body: JSON.stringify({ phone, code: '123456' }),
+          });
+
+          if (!session.accessToken || !session.refreshToken) {
+            throw new Error('verify-otp did not return token pair');
+          }
+
+          const me = await jsonRequest('/auth/me', {
+            headers: { authorization: `Bearer ${session.accessToken}` },
+          });
+
+          if (me.user.phone !== phone || me.user.role !== 'CUSTOMER') {
+            throw new Error(`unexpected authenticated user: ${JSON.stringify(me)}`);
+          }
+
+          const rotated = await jsonRequest('/auth/refresh', {
+            method: 'POST',
+            body: JSON.stringify({ refreshToken: session.refreshToken }),
+          });
+
+          if (rotated.refreshToken === session.refreshToken) {
+            throw new Error('refresh token was not rotated');
+          }
+
+          const oldRefresh = await fetch(`${base}/auth/refresh`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ refreshToken: session.refreshToken }),
+          });
+
+          if (oldRefresh.status !== 401) {
+            throw new Error(`old refresh token should be revoked, got ${oldRefresh.status}`);
+          }
+
+          await jsonRequest('/auth/logout', {
+            method: 'POST',
+            body: JSON.stringify({ refreshToken: rotated.refreshToken }),
+          });
+
+          const afterLogout = await fetch(`${base}/auth/refresh`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ refreshToken: rotated.refreshToken }),
+          });
+
+          if (afterLogout.status !== 401) {
+            throw new Error(`logged-out refresh token should be revoked, got ${afterLogout.status}`);
+          }
+          NODE
