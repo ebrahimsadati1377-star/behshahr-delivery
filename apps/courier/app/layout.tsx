@@ -24,7 +24,7 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="fa" dir="rtl">
-      <body className={vazirmatn.className}>
+      <body className={vazirmatn.className} style={{ fontFamily: vazirmatn.style.fontFamily }}>
         <PwaRegister />
         {children}
       </body>
