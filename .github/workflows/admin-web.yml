@@ -122,8 +122,9 @@ jobs:
           const quote = (await json(`${api}/quotes`, { method:'POST', headers:auth, body:JSON.stringify({pickupAddressId:pickup.id,dropoffAddressId:dropoff.id,vehicleType:'MOTORBIKE'}) })).body;
           const order = (await json(`${api}/orders`, { method:'POST', headers:auth, body:JSON.stringify({quoteId:quote.quoteId,notes:'Admin web smoke'}) })).body;
 
-          await json(`${web}/api/session/request-otp`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({phone:'+989112222222'}) });
-          await json(`${web}/api/session/verify-otp`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({phone:'+989112222222',code:'123456'}) }, 403);
+          const nonAdminPhone = '+989112222223';
+          await json(`${web}/api/session/request-otp`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({phone:nonAdminPhone}) });
+          await json(`${web}/api/session/verify-otp`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({phone:nonAdminPhone,code:'123456'}) }, 403);
 
           await json(`${web}/api/session/request-otp`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({phone:'+989113333333'}) });
           const verified = await json(`${web}/api/session/verify-otp`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({phone:'+989113333333',code:'123456'}) });
