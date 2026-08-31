@@ -1,0 +1,162 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  CUSTOMER
+  COURIER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum VehicleType {
+  MOTORBIKE
+  CAR
+}
+
+enum CourierStatus {
+  OFFLINE
+  AVAILABLE
+  BUSY
+  SUSPENDED
+}
+
+enum OrderStatus {
+  DRAFT
+  QUOTED
+  REQUESTED
+  ASSIGNED
+  PICKED_UP
+  DELIVERED
+  CANCELLED
+  FAILED
+}
+
+enum ActorType {
+  SYSTEM
+  CUSTOMER
+  COURIER
+  ADMIN
+}
+
+model User {
+  id             String      @id @default(uuid()) @db.Uuid
+  phone          String      @unique @db.VarChar(20)
+  role           UserRole    @default(CUSTOMER)
+  status         UserStatus  @default(ACTIVE)
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+  courier        Courier?
+  addresses      Address[]
+  customerOrders Order[]     @relation("CustomerOrders")
+
+  @@map("users")
+}
+
+model Courier {
+  id            String        @id @default(uuid()) @db.Uuid
+  userId        String        @unique @map("user_id") @db.Uuid
+  vehicleType   VehicleType   @map("vehicle_type")
+  status        CourierStatus @default(OFFLINE)
+  lastLatitude  Decimal?      @map("last_latitude") @db.Decimal(9, 6)
+  lastLongitude Decimal?      @map("last_longitude") @db.Decimal(9, 6)
+  lastLocation  Unsupported("geography(Point, 4326)")? @map("last_location")
+  lastSeenAt    DateTime?     @map("last_seen_at")
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orders        Order[]       @relation("CourierOrders")
+
+  @@index([status])
+  @@map("couriers")
+}
+
+model Address {
+  id               String   @id @default(uuid()) @db.Uuid
+  userId           String   @map("user_id") @db.Uuid
+  title            String   @db.VarChar(80)
+  formattedAddress String   @map("formatted_address")
+  latitude         Decimal  @db.Decimal(9, 6)
+  longitude        Decimal  @db.Decimal(9, 6)
+  location         Unsupported("geography(Point, 4326)")?
+  details          String?
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("addresses")
+}
+
+model Order {
+  id                       String      @id @default(uuid()) @db.Uuid
+  publicCode               String      @unique @map("public_code") @db.VarChar(20)
+  customerId               String      @map("customer_id") @db.Uuid
+  courierId                String?     @map("courier_id") @db.Uuid
+  pickupSnapshot           Json        @map("pickup_snapshot") @db.JsonB
+  dropoffSnapshot          Json        @map("dropoff_snapshot") @db.JsonB
+  distanceMeters           Int         @map("distance_meters")
+  estimatedDurationSeconds Int?        @map("estimated_duration_seconds")
+  quotedPrice              BigInt      @map("quoted_price")
+  finalPrice               BigInt?     @map("final_price")
+  status                   OrderStatus @default(REQUESTED)
+  notes                    String?
+  createdAt                DateTime    @default(now()) @map("created_at")
+  assignedAt               DateTime?   @map("assigned_at")
+  pickedUpAt               DateTime?   @map("picked_up_at")
+  deliveredAt              DateTime?   @map("delivered_at")
+  cancelledAt              DateTime?   @map("cancelled_at")
+  updatedAt                DateTime    @updatedAt @map("updated_at")
+  customer                 User        @relation("CustomerOrders", fields: [customerId], references: [id], onDelete: Restrict)
+  courier                  Courier?    @relation("CourierOrders", fields: [courierId], references: [id], onDelete: SetNull)
+  events                   OrderEvent[]
+
+  @@index([customerId, createdAt])
+  @@index([courierId, status])
+  @@index([status, createdAt])
+  @@map("orders")
+}
+
+model OrderEvent {
+  id         BigInt       @id @default(autoincrement())
+  orderId    String       @map("order_id") @db.Uuid
+  actorType  ActorType    @map("actor_type")
+  actorId    String?      @map("actor_id") @db.Uuid
+  eventType  String       @map("event_type") @db.VarChar(80)
+  fromStatus OrderStatus? @map("from_status")
+  toStatus   OrderStatus? @map("to_status")
+  metadata   Json?        @db.JsonB
+  createdAt  DateTime     @default(now()) @map("created_at")
+  order      Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+  @@map("order_events")
+}
+
+model PricingRule {
+  id                     String      @id @default(uuid()) @db.Uuid
+  vehicleType            VehicleType @map("vehicle_type")
+  baseFare               BigInt      @map("base_fare")
+  includedDistanceMeters Int         @map("included_distance_meters")
+  perKmFare              BigInt      @map("per_km_fare")
+  minimumFare            BigInt      @map("minimum_fare")
+  surgeMultiplier        Decimal     @default(1.00) @map("surge_multiplier") @db.Decimal(4, 2)
+  startsAt               DateTime?   @map("starts_at")
+  endsAt                 DateTime?   @map("ends_at")
+  isActive               Boolean     @default(true) @map("is_active")
+  createdAt              DateTime    @default(now()) @map("created_at")
+  updatedAt              DateTime    @updatedAt @map("updated_at")
+
+  @@index([vehicleType, isActive])
+  @@map("pricing_rules")
+}
