@@ -18,7 +18,7 @@ function upstreamPath(parts: string[]): string | null {
   return `/${parts.join('/')}`;
 }
 
-async function callBackend(path: string, request: NextRequest, accessToken: string) {
+async function callBackend(path: string, request: Request, accessToken: string) {
   const body = ['GET', 'HEAD'].includes(request.method) ? undefined : await request.text();
   return backendFetch(path, {
     method: request.method,
