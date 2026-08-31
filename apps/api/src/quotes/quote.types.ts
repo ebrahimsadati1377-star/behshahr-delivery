@@ -1,3 +1,5 @@
+import { RoutingMode } from '../geo/routing.provider';
+
 export interface AddressSnapshot {
   title: string;
   formattedAddress: string;
@@ -18,6 +20,6 @@ export interface LockedQuote {
   estimatedDurationSeconds: number;
   priceToman: number;
   pricingRuleId: string;
-  routingMode: 'APPROXIMATE';
+  routingMode: RoutingMode;
   expiresAt: string;
 }

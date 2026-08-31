@@ -1,5 +1,7 @@
 import { Global, Module } from '@nestjs/common';
+import { AdaptiveRoutingProvider } from './adaptive-routing.provider';
 import { ApproximateRoutingProvider } from './approximate-routing.provider';
+import { NeshanRoutingProvider } from './neshan-routing.provider';
 import { RoutingProvider } from './routing.provider';
 import { ServiceAreaService } from './service-area.service';
 
@@ -8,9 +10,11 @@ import { ServiceAreaService } from './service-area.service';
   providers: [
     ServiceAreaService,
     ApproximateRoutingProvider,
+    NeshanRoutingProvider,
+    AdaptiveRoutingProvider,
     {
       provide: RoutingProvider,
-      useExisting: ApproximateRoutingProvider,
+      useExisting: AdaptiveRoutingProvider,
     },
   ],
   exports: [ServiceAreaService, RoutingProvider],

@@ -1,0 +1,88 @@
+name: Routing Provider
+
+on:
+  pull_request:
+    paths:
+      - "apps/api/src/geo/**"
+      - "apps/api/.env.example"
+      - ".github/workflows/routing-provider.yml"
+
+jobs:
+  verify-routing-provider:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/behshahr_delivery?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm --filter @behshahr-delivery/api build
+      - name: Verify Neshan response parsing and API contract
+        run: |
+          node <<'NODE'
+          const { NeshanRoutingProvider } = require('./apps/api/dist/geo/neshan-routing.provider.js');
+
+          process.env.NESHAN_SERVICE_API_KEY = 'ci-service-key';
+          process.env.NESHAN_API_BASE_URL = 'https://routing.test';
+          process.env.NESHAN_ROUTING_TIMEOUT_MS = '1000';
+
+          let capturedUrl;
+          let capturedHeaders;
+          global.fetch = async (url, init) => {
+            capturedUrl = new URL(String(url));
+            capturedHeaders = init.headers;
+            return new Response(JSON.stringify({
+              routes: [{
+                legs: [
+                  { distance: { value: 1200 }, duration: { value: 180 } },
+                  { distance: { value: 800 }, duration: { value: 120 } },
+                ],
+              }],
+            }), { status: 200, headers: { 'content-type': 'application/json' } });
+          };
+
+          (async () => {
+            const provider = new NeshanRoutingProvider();
+            const route = await provider.estimate(
+              { latitude: 36.7, longitude: 53.55 },
+              { latitude: 36.71, longitude: 53.56 },
+            );
+
+            if (capturedUrl.pathname !== '/v2/direction') throw new Error(`unexpected path ${capturedUrl.pathname}`);
+            if (capturedUrl.searchParams.get('origin') !== '36.7,53.55') throw new Error('origin contract mismatch');
+            if (capturedUrl.searchParams.get('destination') !== '36.71,53.56') throw new Error('destination contract mismatch');
+            if (capturedHeaders['Api-Key'] !== 'ci-service-key') throw new Error('Api-Key header missing');
+            if (route.distanceMeters !== 2000 || route.durationSeconds !== 300 || route.mode !== 'NESHAN') {
+              throw new Error(`unexpected Neshan route ${JSON.stringify(route)}`);
+            }
+          })().catch((error) => { console.error(error); process.exit(1); });
+          NODE
+      - name: Verify auto fallback behavior
+        run: |
+          node <<'NODE'
+          const { AdaptiveRoutingProvider } = require('./apps/api/dist/geo/adaptive-routing.provider.js');
+
+          process.env.ROUTING_PROVIDER = 'auto';
+          process.env.NESHAN_SERVICE_API_KEY = 'configured-but-unavailable';
+
+          const approximate = {
+            estimate: async () => ({ distanceMeters: 2500, durationSeconds: 420, mode: 'APPROXIMATE' }),
+          };
+          const neshan = {
+            estimate: async () => { throw new Error('mock outage'); },
+          };
+
+          (async () => {
+            const provider = new AdaptiveRoutingProvider(approximate, neshan);
+            const route = await provider.estimate(
+              { latitude: 36.7, longitude: 53.55 },
+              { latitude: 36.71, longitude: 53.56 },
+            );
+            if (route.distanceMeters !== 2500 || route.durationSeconds !== 420 || route.mode !== 'APPROXIMATE_FALLBACK') {
+              throw new Error(`unexpected fallback ${JSON.stringify(route)}`);
+            }
+          })().catch((error) => { console.error(error); process.exit(1); });
+          NODE
