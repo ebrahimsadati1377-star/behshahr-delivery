@@ -165,3 +165,18 @@ model PricingRule {
   @@index([vehicleType, isActive])
   @@map("pricing_rules")
 }
+
+model ServiceZone {
+  id              String      @id @default(uuid()) @db.Uuid
+  name            String      @db.VarChar(120)
+  centerLatitude  Decimal     @map("center_latitude") @db.Decimal(9, 6)
+  centerLongitude Decimal     @map("center_longitude") @db.Decimal(9, 6)
+  radiusMeters    Int         @map("radius_meters")
+  polygon         Unsupported("geography(Polygon, 4326)")
+  isActive        Boolean     @default(true) @map("is_active")
+  createdAt       DateTime    @default(now()) @map("created_at")
+  updatedAt       DateTime    @updatedAt @map("updated_at")
+
+  @@index([isActive])
+  @@map("service_zones")
+}
