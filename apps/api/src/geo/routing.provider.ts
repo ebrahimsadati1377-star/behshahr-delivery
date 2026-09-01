@@ -1,6 +1,6 @@
 import { Coordinate } from './geo.utils';
 
-export type RoutingMode = 'APPROXIMATE' | 'APPROXIMATE_FALLBACK' | 'NESHAN';
+export type RoutingMode = 'APPROXIMATE' | 'APPROXIMATE_FALLBACK' | 'NESHAN' | 'MAPIR';
 
 export interface RouteEstimate {
   distanceMeters: number;

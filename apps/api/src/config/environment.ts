@@ -1,6 +1,6 @@
 type NodeEnvironment = 'development' | 'test' | 'production';
 type SmsProviderMode = 'console' | 'ippanel';
-type RoutingProviderMode = 'approximate' | 'neshan' | 'auto';
+type RoutingProviderMode = 'approximate' | 'mapir' | 'neshan' | 'auto';
 
 export type ValidatedEnvironment = {
   nodeEnv: NodeEnvironment;
@@ -33,10 +33,13 @@ export function validateEnvironment(): ValidatedEnvironment {
 
   const routingProvider = enumValue<RoutingProviderMode>(
     'ROUTING_PROVIDER',
-    ['approximate', 'neshan', 'auto'],
+    ['approximate', 'mapir', 'neshan', 'auto'],
     'approximate',
   );
+  if (routingProvider === 'mapir') required('MAPIR_API_KEY');
   if (routingProvider === 'neshan') required('NESHAN_SERVICE_API_KEY');
+  optionalPositiveInteger('MAPIR_ROUTING_TIMEOUT_MS');
+  optionalUrl('MAPIR_API_BASE_URL');
   optionalPositiveInteger('NESHAN_ROUTING_TIMEOUT_MS');
   optionalUrl('NESHAN_API_BASE_URL');
 

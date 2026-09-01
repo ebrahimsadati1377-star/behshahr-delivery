@@ -23,7 +23,7 @@ set +a
 required=(
   POSTGRES_PASSWORD OTP_SECRET JWT_ACCESS_SECRET JWT_REFRESH_SECRET
   IPPANEL_API_KEY IPPANEL_FROM_NUMBER IPPANEL_OTP_PATTERN_CODE
-  NEXT_PUBLIC_NESHAN_MAP_KEY
+  MAPIR_API_KEY
 )
 
 for name in "${required[@]}"; do
@@ -37,10 +37,13 @@ for name in POSTGRES_PASSWORD OTP_SECRET JWT_ACCESS_SECRET JWT_REFRESH_SECRET; d
   (( ${#value} >= 32 )) || fail "$name must be at least 32 characters"
 done
 
-routing="${ROUTING_PROVIDER:-auto}"
-[[ "$routing" == "approximate" || "$routing" == "neshan" || "$routing" == "auto" ]] || fail "ROUTING_PROVIDER must be approximate, neshan, or auto"
+routing="${ROUTING_PROVIDER:-mapir}"
+[[ "$routing" == "approximate" || "$routing" == "mapir" || "$routing" == "neshan" || "$routing" == "auto" ]] || fail "ROUTING_PROVIDER must be approximate, mapir, neshan, or auto"
 if [[ "$routing" == "neshan" ]]; then
   [[ -n "${NESHAN_SERVICE_API_KEY:-}" && "${NESHAN_SERVICE_API_KEY}" != *"CHANGE_ME"* ]] || fail "NESHAN_SERVICE_API_KEY is required for ROUTING_PROVIDER=neshan"
+fi
+if [[ -n "${NESHAN_SERVICE_API_KEY:-}" && "${NESHAN_SERVICE_API_KEY}" == *"CHANGE_ME"* ]]; then
+  fail "NESHAN_SERVICE_API_KEY must be empty or a real key"
 fi
 
 for port in "${DEKAN_API_PORT:-4000}" "${DEKAN_COURIER_PORT:-3001}" "${DEKAN_ADMIN_PORT:-3002}"; do
@@ -61,5 +64,6 @@ if grep -Eq 'host_ip: (0\.0\.0\.0|::)' <<<"$rendered"; then
 fi
 
 info "compose configuration is valid"
+info "Map.ir routing/map key is configured"
 info "host bindings are loopback-only"
 info "resource-limited Dekan profile preflight passed"

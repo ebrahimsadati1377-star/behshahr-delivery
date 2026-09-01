@@ -53,7 +53,7 @@ Generate application/database secrets with, for example:
 openssl rand -hex 32
 ```
 
-Production API startup requires the real IPPanel settings. Neshan routing can use `ROUTING_PROVIDER=approximate` temporarily, but the Courier web map still requires a valid `NEXT_PUBLIC_NESHAN_MAP_KEY` for map rendering.
+Production API startup requires the real IPPanel settings. The initial Dekan pilot uses Map.ir for both server-side route distance/duration and the Courier mission map. Create one Map.ir project API key and place it only in the server-side `MAPIR_API_KEY` variable. Docker injects that value into the Courier web build as `NEXT_PUBLIC_MAPIR_API_KEY`; browser map keys are client-visible by design, so apply domain/project restrictions in the provider dashboard when available. Neshan remains optional as an alternate provider and is not required for this profile.
 
 ## Validate and deploy
 

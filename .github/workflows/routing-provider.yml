@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "apps/api/src/geo/**"
+      - "apps/api/src/config/environment.ts"
       - "apps/api/.env.example"
       - ".github/workflows/routing-provider.yml"
 
@@ -18,9 +19,48 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @behshahr-delivery/api build
-      - name: Verify Neshan response parsing and API contract
+      - name: Verify Map.ir response parsing and API contract
+        run: |
+          node <<'NODE'
+          const { MapIrRoutingProvider } = require('./apps/api/dist/geo/mapir-routing.provider.js');
+
+          process.env.MAPIR_API_KEY = 'ci-mapir-key';
+          process.env.MAPIR_API_BASE_URL = 'https://routing.test';
+          process.env.MAPIR_ROUTING_TIMEOUT_MS = '1000';
+
+          let capturedUrl;
+          let capturedHeaders;
+          global.fetch = async (url, init) => {
+            capturedUrl = new URL(String(url));
+            capturedHeaders = init.headers;
+            return new Response(JSON.stringify({
+              routes: [{ distance: 2012.4, duration: 301.2 }],
+              waypoints: [],
+              code: 'Ok',
+            }), { status: 200, headers: { 'content-type': 'application/json' } });
+          };
+
+          (async () => {
+            const provider = new MapIrRoutingProvider();
+            const route = await provider.estimate(
+              { latitude: 36.7, longitude: 53.55 },
+              { latitude: 36.71, longitude: 53.56 },
+            );
+
+            if (capturedUrl.pathname !== '/routes/route/v1/driving/53.55,36.7;53.56,36.71') {
+              throw new Error(`unexpected path ${capturedUrl.pathname}`);
+            }
+            if (capturedUrl.searchParams.get('alternatives') !== 'false') throw new Error('alternatives mismatch');
+            if (capturedUrl.searchParams.get('steps') !== 'false') throw new Error('steps mismatch');
+            if (capturedHeaders['x-api-key'] !== 'ci-mapir-key') throw new Error('x-api-key header missing');
+            if (route.distanceMeters !== 2013 || route.durationSeconds !== 302 || route.mode !== 'MAPIR') {
+              throw new Error(`unexpected Map.ir route ${JSON.stringify(route)}`);
+            }
+          })().catch((error) => { console.error(error); process.exit(1); });
+          NODE
+      - name: Verify Neshan response parsing remains supported
         run: |
           node <<'NODE'
           const { NeshanRoutingProvider } = require('./apps/api/dist/geo/neshan-routing.provider.js');
@@ -66,17 +106,21 @@ jobs:
           const { AdaptiveRoutingProvider } = require('./apps/api/dist/geo/adaptive-routing.provider.js');
 
           process.env.ROUTING_PROVIDER = 'auto';
-          process.env.NESHAN_SERVICE_API_KEY = 'configured-but-unavailable';
+          process.env.MAPIR_API_KEY = 'configured-but-unavailable';
+          delete process.env.NESHAN_SERVICE_API_KEY;
 
           const approximate = {
             estimate: async () => ({ distanceMeters: 2500, durationSeconds: 420, mode: 'APPROXIMATE' }),
           };
+          const mapir = {
+            estimate: async () => { throw new Error('mock Map.ir outage'); },
+          };
           const neshan = {
-            estimate: async () => { throw new Error('mock outage'); },
+            estimate: async () => { throw new Error('Neshan should not be called without a key'); },
           };
 
           (async () => {
-            const provider = new AdaptiveRoutingProvider(approximate, neshan);
+            const provider = new AdaptiveRoutingProvider(approximate, mapir, neshan);
             const route = await provider.estimate(
               { latitude: 36.7, longitude: 53.55 },
               { latitude: 36.71, longitude: 53.56 },

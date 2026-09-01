@@ -39,7 +39,7 @@ function markerElement(kind: 'pickup' | 'dropoff' | 'courier') {
 export function MissionMap({ pickup, dropoff, courier }: MissionMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState('');
-  const apiKey = process.env.NEXT_PUBLIC_NESHAN_MAP_KEY?.trim() ?? '';
+  const apiKey = process.env.NEXT_PUBLIC_MAPIR_API_KEY?.trim() ?? '';
   const pickupPoint = useMemo(() => normalize(pickup), [pickup]);
   const dropoffPoint = useMemo(() => normalize(dropoff), [dropoff]);
   const courierPoint = useMemo(() => normalize(courier), [courier]);
@@ -55,18 +55,24 @@ export function MissionMap({ pickup, dropoff, courier }: MissionMapProps) {
 
     async function initialize() {
       try {
+        // The existing MapLibre-compatible engine is kept to avoid adding another
+        // browser mapping dependency; all map data and authentication come from Map.ir.
         const sdk = await import('@neshan-maps-platform/maplibre-sdk');
         if (disposed || !containerRef.current) return;
         const maplibregl = sdk.default;
         const bounds = new maplibregl.LngLatBounds();
         const nextMap = new maplibregl.Map({
           container: containerRef.current,
-          style: 'https://static.neshan.org/sdk/maplibre/styles/light.json',
+          style: 'https://map.ir/vector/styles/main/mapir-xyz-style.json',
           center: [pickupCoordinate.longitude, pickupCoordinate.latitude],
           zoom: 13,
-          apiKey,
-          logoPosition: 'bottom-left',
-          copyRightPosition: 'bottom-right',
+          transformRequest: (url: string) => ({
+            url,
+            headers: {
+              'x-api-key': apiKey,
+              'Mapir-SDK': 'behshahr-delivery-web',
+            },
+          }),
         });
 
         const markers = [
@@ -105,7 +111,7 @@ export function MissionMap({ pickup, dropoff, courier }: MissionMapProps) {
     return (
       <div className="mission-map-fallback">
         <span>⌖</span>
-        <div><strong>نمای نقشه مأموریت آماده است</strong><small>بعد از ثبت کلید Web Map نشان، مبدا، مقصد و موقعیت زنده پیک اینجا نمایش داده می‌شود.</small></div>
+        <div><strong>نمای نقشه مأموریت آماده است</strong><small>بعد از ثبت کلید Map.ir، مبدا، مقصد و موقعیت زنده پیک اینجا نمایش داده می‌شود.</small></div>
       </div>
     );
   }

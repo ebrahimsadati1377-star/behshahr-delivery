@@ -48,11 +48,13 @@ jobs:
           IPPANEL_OTP_PARAM_NAME=code
           IPPANEL_API_BASE_URL=https://edge.ippanel.com
           IPPANEL_TIMEOUT_MS=1000
-          ROUTING_PROVIDER=approximate
+          ROUTING_PROVIDER=mapir
+          MAPIR_API_KEY=ci-fake-mapir-key
+          MAPIR_API_BASE_URL=https://map.ir
+          MAPIR_ROUTING_TIMEOUT_MS=1000
           NESHAN_SERVICE_API_KEY=
           NESHAN_API_BASE_URL=https://api.neshan.org
           NESHAN_ROUTING_TIMEOUT_MS=1000
-          NEXT_PUBLIC_NESHAN_MAP_KEY=ci-fake-web-map-key
           SERVICE_CENTER_LAT=36.6980
           SERVICE_CENTER_LNG=53.5520
           SERVICE_RADIUS_METERS=15000
@@ -66,6 +68,7 @@ jobs:
           ENV_FILE=ops/dekan.env bash ops/dekan-preflight.sh
           rendered="$(docker compose --env-file ops/dekan.env -f docker-compose.dekan.yml config)"
           grep -q 'host_ip: 127.0.0.1' <<<"$rendered"
+          grep -q 'ROUTING_PROVIDER: mapir' <<<"$rendered"
           ! grep -q 'published: "80"' <<<"$rendered"
           ! grep -q 'published: "443"' <<<"$rendered"
           ! grep -q 'customer:' <<<"$rendered"
