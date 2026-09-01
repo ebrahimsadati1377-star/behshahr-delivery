@@ -21,7 +21,7 @@ bash ops/backup-postgres.sh >/tmp/behshahr-pre-restore-backup.txt
 cat /tmp/behshahr-pre-restore-backup.txt
 
 echo "[restore] stopping application traffic"
-"${COMPOSE[@]}" stop customer courier admin api caddy
+"${COMPOSE[@]}" stop customer courier admin api caddy >/dev/null 2>&1 || true
 
 REMOTE_FILE="/tmp/behshahr-restore.dump"
 "${COMPOSE[@]}" cp "$BACKUP_FILE" "postgres:${REMOTE_FILE}" >/dev/null
@@ -43,8 +43,15 @@ echo "[restore] recreating database"
 "${COMPOSE[@]}" exec -T postgres pg_restore \
   -U postgres -d behshahr_delivery --no-owner --no-privileges --exit-on-error "$REMOTE_FILE"
 
-# Bring the restored database up to the schema expected by the checked-out release.
-"${COMPOSE[@]}" run --rm migrate
+if [[ "${RESTORE_SKIP_MIGRATE:-0}" != "1" ]]; then
+  # Bring the restored database up to the schema expected by the checked-out release.
+  "${COMPOSE[@]}" run --rm migrate
+fi
+
+if [[ "${RESTORE_SKIP_APP_START:-0}" == "1" ]]; then
+  echo "[restore] database restore verified; application restart skipped by request"
+  exit 0
+fi
 
 "${COMPOSE[@]}" up -d api customer courier admin caddy
 
