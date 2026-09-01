@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { AddressMapPicker } from './address-map-picker';
 
 interface Address {
   id: string;
@@ -28,6 +29,7 @@ export default function AddressesPage() {
   const [editId, setEditId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [locating, setLocating] = useState(false);
   const [error, setError] = useState('');
 
   const load = useCallback(async () => {
@@ -47,12 +49,18 @@ export default function AddressesPage() {
       .finally(() => setLoading(false));
   }, [load]);
 
+  const setMapCoordinates = useCallback((latitude: string, longitude: string) => {
+    setForm((current) => ({ ...current, latitude, longitude }));
+  }, []);
+
   function useCurrentLocation() {
     setError('');
     if (!navigator.geolocation) {
       setError('موقعیت مکانی روی این دستگاه در دسترس نیست.');
       return;
     }
+
+    setLocating(true);
     navigator.geolocation.getCurrentPosition(
       (position) => {
         setForm((current) => ({
@@ -60,8 +68,12 @@ export default function AddressesPage() {
           latitude: position.coords.latitude.toFixed(6),
           longitude: position.coords.longitude.toFixed(6),
         }));
+        setLocating(false);
       },
-      () => setError('دسترسی به موقعیت مکانی داده نشد.'),
+      () => {
+        setError('دسترسی به موقعیت مکانی داده نشد.');
+        setLocating(false);
+      },
       { enableHighAccuracy: true, timeout: 10000 },
     );
   }
@@ -71,11 +83,24 @@ export default function AddressesPage() {
     setSaving(true);
     setError('');
     try {
+      const latitude = Number(form.latitude);
+      const longitude = Number(form.longitude);
+      if (
+        !form.latitude ||
+        !form.longitude ||
+        !Number.isFinite(latitude) ||
+        !Number.isFinite(longitude) ||
+        latitude < -90 || latitude > 90 ||
+        longitude < -180 || longitude > 180
+      ) {
+        throw new Error('ابتدا موقعیت آدرس را روی نقشه یا با GPS مشخص کن.');
+      }
+
       const payload = {
         title: form.title.trim(),
         formattedAddress: form.formattedAddress.trim(),
-        latitude: Number(form.latitude),
-        longitude: Number(form.longitude),
+        latitude,
+        longitude,
         details: form.details.trim() || undefined,
       };
       const response = await fetch(
@@ -141,17 +166,27 @@ export default function AddressesPage() {
             <label htmlFor="formattedAddress">نشانی</label>
             <input id="formattedAddress" className="input" placeholder="بهشهر، خیابان…" value={form.formattedAddress} onChange={(event) => setForm({ ...form, formattedAddress: event.target.value })} required />
           </div>
-          <button type="button" className="secondary" onClick={useCurrentLocation}>استفاده از موقعیت فعلی</button>
-          <div className="two-cols" style={{ marginTop: 12 }}>
-            <div className="field">
-              <label htmlFor="latitude">عرض جغرافیایی</label>
-              <input id="latitude" className="input" dir="ltr" inputMode="decimal" value={form.latitude} onChange={(event) => setForm({ ...form, latitude: event.target.value })} required />
+
+          <AddressMapPicker latitude={form.latitude} longitude={form.longitude} onChange={setMapCoordinates} />
+
+          <button type="button" className="secondary" onClick={useCurrentLocation} disabled={locating}>
+            {locating ? 'در حال دریافت موقعیت…' : 'استفاده از موقعیت فعلی گوشی'}
+          </button>
+
+          <details style={{ margin: '12px 0 16px' }}>
+            <summary className="text-link" style={{ cursor: 'pointer' }}>ورود دستی مختصات</summary>
+            <div className="two-cols" style={{ marginTop: 10 }}>
+              <div className="field">
+                <label htmlFor="latitude">عرض جغرافیایی</label>
+                <input id="latitude" className="input" dir="ltr" inputMode="decimal" value={form.latitude} onChange={(event) => setForm({ ...form, latitude: event.target.value })} />
+              </div>
+              <div className="field">
+                <label htmlFor="longitude">طول جغرافیایی</label>
+                <input id="longitude" className="input" dir="ltr" inputMode="decimal" value={form.longitude} onChange={(event) => setForm({ ...form, longitude: event.target.value })} />
+              </div>
             </div>
-            <div className="field">
-              <label htmlFor="longitude">طول جغرافیایی</label>
-              <input id="longitude" className="input" dir="ltr" inputMode="decimal" value={form.longitude} onChange={(event) => setForm({ ...form, longitude: event.target.value })} required />
-            </div>
-          </div>
+          </details>
+
           <div className="field">
             <label htmlFor="details">جزئیات اختیاری</label>
             <input id="details" className="input" placeholder="پلاک، طبقه، واحد…" value={form.details} onChange={(event) => setForm({ ...form, details: event.target.value })} />
