@@ -46,6 +46,9 @@ export function MissionMap({ pickup, dropoff, courier }: MissionMapProps) {
 
   useEffect(() => {
     if (!apiKey || !containerRef.current || !pickupPoint || !dropoffPoint) return;
+    const pickupCoordinate = pickupPoint;
+    const dropoffCoordinate = dropoffPoint;
+    const courierCoordinate = courierPoint;
 
     let disposed = false;
     let map: { remove: () => void } | null = null;
@@ -59,7 +62,7 @@ export function MissionMap({ pickup, dropoff, courier }: MissionMapProps) {
         const nextMap = new maplibregl.Map({
           container: containerRef.current,
           style: 'https://static.neshan.org/sdk/maplibre/styles/light.json',
-          center: [pickupPoint.longitude, pickupPoint.latitude],
+          center: [pickupCoordinate.longitude, pickupCoordinate.latitude],
           zoom: 13,
           apiKey,
           logoPosition: 'bottom-left',
@@ -67,9 +70,9 @@ export function MissionMap({ pickup, dropoff, courier }: MissionMapProps) {
         });
 
         const markers = [
-          { kind: 'pickup' as const, point: pickupPoint, label: pickupPoint.title ?? 'مبدا' },
-          { kind: 'dropoff' as const, point: dropoffPoint, label: dropoffPoint.title ?? 'مقصد' },
-          ...(courierPoint ? [{ kind: 'courier' as const, point: courierPoint, label: 'موقعیت من' }] : []),
+          { kind: 'pickup' as const, point: pickupCoordinate, label: pickupCoordinate.title ?? 'مبدا' },
+          { kind: 'dropoff' as const, point: dropoffCoordinate, label: dropoffCoordinate.title ?? 'مقصد' },
+          ...(courierCoordinate ? [{ kind: 'courier' as const, point: courierCoordinate, label: 'موقعیت من' }] : []),
         ];
 
         for (const item of markers) {
