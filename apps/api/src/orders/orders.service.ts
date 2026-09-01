@@ -7,6 +7,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { concat, defer, from, interval, map, merge, of, switchMap } from 'rxjs';
 import { PrismaService } from '../database/prisma.service';
+import { Prisma } from '../generated/prisma/client';
 import { QuotesService } from '../quotes/quotes.service';
 import { OrderRealtimeService } from '../realtime/order-realtime.service';
 import { CreateOrderDto } from './dto/create-order.dto';
@@ -21,6 +22,18 @@ type SerializedPaymentSource = {
   paidAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+};
+
+export type IntegrationOrderInput = {
+  quoteId: string;
+  provider: string;
+  storeId: string;
+  externalOrderId: string;
+  recipientName?: string;
+  recipientPhone?: string;
+  notes?: string;
+  upstreamPaid: boolean;
+  sourcePayload: Prisma.InputJsonValue;
 };
 
 @Injectable()
@@ -92,6 +105,128 @@ export class OrdersService {
       });
 
       return this.serializeOrder(order);
+    } catch (error) {
+      await this.quotes.restoreLockedQuote(quote);
+      throw error;
+    }
+  }
+
+  async findIntegrationOrder(
+    provider: string,
+    storeId: string,
+    externalOrderId: string,
+  ) {
+    const link = await this.prisma.externalOrderLink.findUnique({
+      where: {
+        provider_storeId_externalOrderId: { provider, storeId, externalOrderId },
+      },
+      include: { order: { include: { payment: true } } },
+    });
+
+    if (!link) return null;
+
+    return {
+      duplicate: true,
+      externalOrder: {
+        provider: link.provider,
+        storeId: link.storeId,
+        externalOrderId: link.externalOrderId,
+      },
+      order: this.serializeOrder(link.order),
+    };
+  }
+
+  async createFromIntegration(userId: string, input: IntegrationOrderInput) {
+    const existing = await this.findIntegrationOrder(
+      input.provider,
+      input.storeId,
+      input.externalOrderId,
+    );
+    if (existing) return existing;
+
+    const quote = await this.quotes.consumeLockedQuote(userId, input.quoteId);
+    const paymentMethod = input.upstreamPaid ? 'ONLINE' : 'CASH';
+    const paymentStatus = input.upstreamPaid ? 'PAID' : 'PENDING';
+    const paidAt = input.upstreamPaid ? new Date() : null;
+
+    try {
+      const order = await this.prisma.order.create({
+        data: {
+          publicCode: this.publicCode(),
+          customerId: userId,
+          pricingRuleId: quote.pricingRuleId,
+          vehicleType: quote.vehicleType,
+          pickupSnapshot: { ...quote.pickupSnapshot },
+          dropoffSnapshot: { ...quote.dropoffSnapshot },
+          distanceMeters: quote.distanceMeters,
+          estimatedDurationSeconds: quote.estimatedDurationSeconds,
+          quotedPrice: BigInt(quote.priceToman),
+          status: 'REQUESTED',
+          notes: input.notes,
+          externalLink: {
+            create: {
+              provider: input.provider,
+              storeId: input.storeId,
+              externalOrderId: input.externalOrderId,
+              recipientName: input.recipientName,
+              recipientPhone: input.recipientPhone,
+              sourcePayload: input.sourcePayload,
+            },
+          },
+          payment: {
+            create: {
+              method: paymentMethod,
+              status: paymentStatus,
+              amount: BigInt(quote.priceToman),
+              provider: input.provider,
+              providerReference: input.externalOrderId,
+              paidAt,
+              events: {
+                create: {
+                  actorType: 'SYSTEM',
+                  eventType: input.upstreamPaid
+                    ? 'PAYMENT_IMPORTED_AS_PAID'
+                    : 'PAYMENT_IMPORTED_AS_PENDING',
+                  toStatus: paymentStatus,
+                  metadata: {
+                    provider: input.provider,
+                    storeId: input.storeId,
+                    externalOrderId: input.externalOrderId,
+                  },
+                },
+              },
+            },
+          },
+          events: {
+            create: {
+              actorType: 'SYSTEM',
+              eventType: 'ORDER_IMPORTED',
+              toStatus: 'REQUESTED',
+              metadata: {
+                provider: input.provider,
+                storeId: input.storeId,
+                externalOrderId: input.externalOrderId,
+                quoteId: quote.quoteId,
+                pricingRuleId: quote.pricingRuleId,
+                vehicleType: quote.vehicleType,
+                routingMode: quote.routingMode,
+              },
+            },
+          },
+        },
+        include: { payment: true },
+      });
+
+      this.realtime.publish(order.id, 'ORDER_STATUS');
+      return {
+        duplicate: false,
+        externalOrder: {
+          provider: input.provider,
+          storeId: input.storeId,
+          externalOrderId: input.externalOrderId,
+        },
+        order: this.serializeOrder(order),
+      };
     } catch (error) {
       await this.quotes.restoreLockedQuote(quote);
       throw error;

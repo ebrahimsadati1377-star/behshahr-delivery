@@ -9,6 +9,11 @@ import { AddressSnapshot, LockedQuote } from './quote.types';
 
 const QUOTE_TTL_SECONDS = 10 * 60;
 
+type QuoteAddressIds = {
+  pickupAddressId?: string;
+  dropoffAddressId?: string;
+};
+
 @Injectable()
 export class QuotesService {
   constructor(
@@ -36,8 +41,22 @@ export class QuotesService {
       throw new NotFoundException('Dropoff address not found');
     }
 
-    const pickupSnapshot = this.addressSnapshot(pickup);
-    const dropoffSnapshot = this.addressSnapshot(dropoff);
+    return this.createFromSnapshots(
+      userId,
+      this.addressSnapshot(pickup),
+      this.addressSnapshot(dropoff),
+      dto.vehicleType,
+      { pickupAddressId: pickup.id, dropoffAddressId: dropoff.id },
+    );
+  }
+
+  async createFromSnapshots(
+    userId: string,
+    pickupSnapshot: AddressSnapshot,
+    dropoffSnapshot: AddressSnapshot,
+    vehicleType: 'MOTORBIKE' | 'CAR',
+    addressIds: QuoteAddressIds = {},
+  ) {
     const pickupCoordinate = {
       latitude: pickupSnapshot.latitude,
       longitude: pickupSnapshot.longitude,
@@ -54,7 +73,7 @@ export class QuotesService {
 
     const [route, pricingRule] = await Promise.all([
       this.routing.estimate(pickupCoordinate, dropoffCoordinate),
-      this.findPricingRule(dto.vehicleType),
+      this.findPricingRule(vehicleType),
     ]);
 
     const priceToman = this.calculatePrice(route.distanceMeters, pricingRule);
@@ -63,11 +82,10 @@ export class QuotesService {
     const lockedQuote: LockedQuote = {
       quoteId,
       userId,
-      pickupAddressId: pickup.id,
-      dropoffAddressId: dropoff.id,
+      ...addressIds,
       pickupSnapshot,
       dropoffSnapshot,
-      vehicleType: dto.vehicleType,
+      vehicleType,
       distanceMeters: route.distanceMeters,
       estimatedDurationSeconds: route.durationSeconds,
       priceToman,
@@ -84,9 +102,9 @@ export class QuotesService {
 
     return {
       quoteId,
-      pickupAddressId: pickup.id,
-      dropoffAddressId: dropoff.id,
-      vehicleType: dto.vehicleType,
+      pickupAddressId: addressIds.pickupAddressId ?? null,
+      dropoffAddressId: addressIds.dropoffAddressId ?? null,
+      vehicleType,
       distanceMeters: route.distanceMeters,
       estimatedDurationSeconds: route.durationSeconds,
       priceToman,
