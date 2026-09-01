@@ -1,0 +1,226 @@
+name: Customer SSE
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify-customer-sse:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/behshahr_delivery?schema=public
+      REDIS_URL: redis://localhost:6379
+      API_PORT: 4000
+      NODE_ENV: test
+      SMS_PROVIDER: console
+      DEV_OTP_CODE: "123456"
+      OTP_SECRET: sse-ci-otp-secret
+      JWT_ACCESS_SECRET: sse-ci-access-secret
+      JWT_REFRESH_SECRET: sse-ci-refresh-secret
+      SERVICE_CENTER_LAT: "36.700000"
+      SERVICE_CENTER_LNG: "53.550000"
+      SERVICE_RADIUS_METERS: "20000"
+      ROUTING_PROVIDER: approximate
+      ROUTE_DISTANCE_FACTOR: "1.25"
+      ROUTE_AVG_SPEED_KMH: "25"
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: behshahr_delivery
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d behshahr_delivery"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm --filter @behshahr-delivery/api prisma:migrate:deploy
+      - name: Seed SSE fixtures
+        run: |
+          pnpm --filter @behshahr-delivery/api exec node <<'NODE'
+          const { Client } = require('pg');
+          (async () => {
+            const db = new Client({ connectionString: process.env.DATABASE_URL });
+            await db.connect();
+            await db.query(`
+              INSERT INTO "pricing_rules" (
+                "id", "vehicle_type", "base_fare", "included_distance_meters",
+                "per_km_fare", "minimum_fare", "surge_multiplier", "is_active",
+                "created_at", "updated_at"
+              ) VALUES (
+                '00000000-0000-4000-8000-000000000201', 'MOTORBIKE', 50000, 1000,
+                15000, 50000, 1.00, true, NOW(), NOW()
+              );
+              INSERT INTO "users" (
+                "id", "phone", "role", "status", "created_at", "updated_at"
+              ) VALUES (
+                '00000000-0000-4000-8000-000000000210', '+989111111210', 'COURIER', 'ACTIVE', NOW(), NOW()
+              );
+              INSERT INTO "couriers" (
+                "id", "user_id", "vehicle_type", "status", "created_at", "updated_at"
+              ) VALUES (
+                '00000000-0000-4000-8000-000000000211', '00000000-0000-4000-8000-000000000210',
+                'MOTORBIKE', 'OFFLINE', NOW(), NOW()
+              );
+            `);
+            await db.end();
+          })().catch((error) => { console.error(error); process.exit(1); });
+          NODE
+      - run: pnpm --filter @behshahr-delivery/api build
+      - run: pnpm --filter @behshahr-delivery/customer typecheck
+      - run: pnpm --filter @behshahr-delivery/customer build
+      - name: Verify SSE status and location events
+        run: |
+          pnpm --filter @behshahr-delivery/api start > /tmp/sse-api.log 2>&1 &
+          API_PID=$!
+          trap 'kill $API_PID || true' EXIT
+
+          for attempt in {1..25}; do
+            curl --fail --silent http://127.0.0.1:4000/api/health >/dev/null && break
+            if [ "$attempt" -eq 25 ]; then cat /tmp/sse-api.log; exit 1; fi
+            sleep 1
+          done
+
+          node <<'NODE'
+          const base = 'http://127.0.0.1:4000/api';
+
+          async function request(path, options = {}) {
+            const response = await fetch(`${base}${path}`, {
+              ...options,
+              headers: { 'content-type': 'application/json', ...(options.headers ?? {}) },
+            });
+            const body = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(`${path} failed ${response.status}: ${JSON.stringify(body)}`);
+            return body;
+          }
+
+          async function login(phone) {
+            await request('/auth/request-otp', { method: 'POST', body: JSON.stringify({ phone }) });
+            return request('/auth/verify-otp', {
+              method: 'POST', body: JSON.stringify({ phone, code: '123456' }),
+            });
+          }
+
+          function createSseReader(response) {
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            async function nextOrder(timeoutMs = 8000) {
+              const deadline = Date.now() + timeoutMs;
+              while (Date.now() < deadline) {
+                const remaining = deadline - Date.now();
+                const chunk = await Promise.race([
+                  reader.read(),
+                  new Promise((_, reject) => setTimeout(() => reject(new Error('SSE event timeout')), remaining)),
+                ]);
+                if (chunk.done) throw new Error('SSE stream ended unexpectedly');
+                buffer += decoder.decode(chunk.value, { stream: true });
+
+                while (buffer.includes('\n\n')) {
+                  const boundary = buffer.indexOf('\n\n');
+                  const raw = buffer.slice(0, boundary);
+                  buffer = buffer.slice(boundary + 2);
+                  const lines = raw.split('\n');
+                  const eventType = lines.find((line) => line.startsWith('event:'))?.slice(6).trim() ?? 'message';
+                  const data = lines.filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('\n');
+                  if (eventType === 'order' && data) return JSON.parse(data);
+                }
+              }
+              throw new Error('SSE order event timeout');
+            }
+
+            return { nextOrder, cancel: () => reader.cancel() };
+          }
+
+          const customer = await login('+989122222210');
+          const courier = await login('+989111111210');
+          const ch = { authorization: `Bearer ${customer.accessToken}` };
+          const rh = { authorization: `Bearer ${courier.accessToken}` };
+
+          const pickup = await request('/addresses', {
+            method: 'POST', headers: ch,
+            body: JSON.stringify({ title: 'Pickup', formattedAddress: 'SSE pickup', latitude: 36.7, longitude: 53.55 }),
+          });
+          const dropoff = await request('/addresses', {
+            method: 'POST', headers: ch,
+            body: JSON.stringify({ title: 'Dropoff', formattedAddress: 'SSE dropoff', latitude: 36.71, longitude: 53.56 }),
+          });
+          const quote = await request('/quotes', {
+            method: 'POST', headers: ch,
+            body: JSON.stringify({ pickupAddressId: pickup.id, dropoffAddressId: dropoff.id, vehicleType: 'MOTORBIKE' }),
+          });
+          const order = await request('/orders', {
+            method: 'POST', headers: ch, body: JSON.stringify({ quoteId: quote.quoteId }),
+          });
+
+          const streamResponse = await fetch(`${base}/orders/${order.id}/stream`, {
+            headers: { authorization: `Bearer ${customer.accessToken}`, accept: 'text/event-stream' },
+          });
+          if (!streamResponse.ok || !streamResponse.body) {
+            throw new Error(`SSE connection failed: ${streamResponse.status}`);
+          }
+          const stream = createSseReader(streamResponse);
+
+          let event = await stream.nextOrder();
+          if (event.status !== 'REQUESTED' || event.courierTracking !== null) {
+            throw new Error(`unexpected initial SSE snapshot: ${JSON.stringify(event)}`);
+          }
+
+          await request('/courier/location', {
+            method: 'POST', headers: rh,
+            body: JSON.stringify({ latitude: 36.701111, longitude: 53.551111 }),
+          });
+          await request('/courier/availability', {
+            method: 'PATCH', headers: rh, body: JSON.stringify({ status: 'AVAILABLE' }),
+          });
+          await request(`/courier/orders/${order.id}/accept`, { method: 'POST', headers: rh });
+
+          event = await stream.nextOrder();
+          if (event.status !== 'ASSIGNED' || !event.courierTracking) {
+            throw new Error(`assignment SSE event missing tracking: ${JSON.stringify(event)}`);
+          }
+
+          await request('/courier/location', {
+            method: 'POST', headers: rh,
+            body: JSON.stringify({ latitude: 36.704444, longitude: 53.554444 }),
+          });
+          event = await stream.nextOrder();
+          if (Math.abs(event.courierTracking?.latitude - 36.704444) > 0.000001) {
+            throw new Error(`location SSE event stale: ${JSON.stringify(event.courierTracking)}`);
+          }
+
+          await request(`/courier/orders/${order.id}/picked-up`, { method: 'POST', headers: rh });
+          event = await stream.nextOrder();
+          if (event.status !== 'PICKED_UP' || !event.courierTracking) {
+            throw new Error(`pickup SSE event invalid: ${JSON.stringify(event)}`);
+          }
+
+          await request(`/courier/orders/${order.id}/delivered`, { method: 'POST', headers: rh });
+          event = await stream.nextOrder();
+          if (event.status !== 'DELIVERED' || event.courierTracking !== null) {
+            throw new Error(`delivery SSE privacy invalid: ${JSON.stringify(event)}`);
+          }
+
+          await stream.cancel();
+          NODE
