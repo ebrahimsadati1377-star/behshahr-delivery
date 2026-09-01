@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { backendFetch } from '../../../../lib/backend';
 import { ACCESS_COOKIE, REFRESH_COOKIE, SessionPayload, clearSessionCookies, setSessionCookies } from '../../../../lib/session';
 
-const allowedRoots = new Set(['orders', 'couriers']);
+const allowedRoots = new Set(['orders', 'couriers', 'pricing-rules']);
 const allowedMethods = new Set(['GET', 'POST']);
 
 function upstreamPath(parts: string[]) {
