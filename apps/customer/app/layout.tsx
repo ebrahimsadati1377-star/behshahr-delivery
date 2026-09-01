@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from 'next';
 import { Vazirmatn } from 'next/font/google';
+import '@neshan-maps-platform/maplibre-sdk/style.css';
 import './globals.css';
+import './map.css';
 import { PwaRegister } from './pwa-register';
 
 const vazirmatn = Vazirmatn({

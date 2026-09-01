@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { MissionMap } from '../components/mission-map';
 
 type CourierStatus = 'OFFLINE' | 'AVAILABLE' | 'BUSY' | 'SUSPENDED';
 
@@ -19,8 +20,8 @@ interface AddressSnapshot {
   title?: string;
   formattedAddress?: string;
   details?: string;
-  latitude?: number;
-  longitude?: number;
+  latitude?: number | string;
+  longitude?: number | string;
 }
 
 interface CourierOrder {
@@ -52,8 +53,10 @@ function toman(value: number) {
 }
 
 function mapHref(point?: AddressSnapshot) {
-  if (typeof point?.latitude !== 'number' || typeof point?.longitude !== 'number') return null;
-  return `geo:${point.latitude},${point.longitude}?q=${point.latitude},${point.longitude}`;
+  const latitude = Number(point?.latitude);
+  const longitude = Number(point?.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  return `geo:${latitude},${longitude}?q=${latitude},${longitude}`;
 }
 
 function missionStep(status: string) {
@@ -96,7 +99,19 @@ function RoutePoint({ kind, point }: { kind: 'pickup' | 'dropoff'; point: Addres
   );
 }
 
-function OrderCard({ order, action, busy, current = false }: { order: CourierOrder; action: (path: string) => Promise<void>; busy: boolean; current?: boolean }) {
+function OrderCard({
+  order,
+  action,
+  busy,
+  current = false,
+  courierLocation,
+}: {
+  order: CourierOrder;
+  action: (path: string) => Promise<void>;
+  busy: boolean;
+  current?: boolean;
+  courierLocation?: { latitude: number | string | null; longitude: number | string | null } | null;
+}) {
   return (
     <article className={current ? 'order-card current-order-card' : 'order-card'}>
       <div className="order-head">
@@ -108,6 +123,14 @@ function OrderCard({ order, action, busy, current = false }: { order: CourierOrd
       </div>
 
       {current && ['ASSIGNED', 'PICKED_UP'].includes(order.status) ? <MissionProgress status={order.status} /> : null}
+
+      {current ? (
+        <MissionMap
+          pickup={order.pickupSnapshot}
+          dropoff={order.dropoffSnapshot}
+          courier={courierLocation ? { ...courierLocation, title: 'موقعیت من' } : null}
+        />
+      ) : null}
 
       <div className="route-panel">
         <RoutePoint kind="pickup" point={order.pickupSnapshot} />
@@ -183,6 +206,7 @@ export default function CourierHomePage() {
       body: JSON.stringify({ latitude, longitude }),
     });
     lastLocationSentAt.current = Date.now();
+    setProfile((existing) => existing ? { ...existing, lastLatitude: latitude, lastLongitude: longitude, lastSeenAt: new Date().toISOString() } : existing);
     setLocationStatus(`موقعیت بروزرسانی شد • ${new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })}`);
   }, [api]);
 
@@ -247,6 +271,11 @@ export default function CourierHomePage() {
     ? new Date(profile.lastSeenAt).toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })
     : null;
 
+  const courierLocation = profile ? {
+    latitude: profile.lastLatitude,
+    longitude: profile.lastLongitude,
+  } : null;
+
   return (
     <main className="shell dashboard-shell">
       <header className="app-header">
@@ -292,7 +321,7 @@ export default function CourierHomePage() {
           <div><span className="eyebrow">مأموریت جاری</span><h2>سفارش فعال</h2></div>
           <span className="live-chip"><i />زنده</span>
         </div>
-        <OrderCard order={current} action={orderAction} busy={actionBusy} current />
+        <OrderCard order={current} action={orderAction} busy={actionBusy} current courierLocation={courierLocation} />
       </section> : null}
 
       {!current && profile?.status === 'AVAILABLE' ? <section className="section queue-section">
