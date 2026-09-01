@@ -90,10 +90,12 @@ export class OrdersService {
       throw new NotFoundException('Order not found');
     }
 
-    const canTrackCourier =
-      (order.status === 'ASSIGNED' || order.status === 'PICKED_UP') &&
-      order.courier?.lastLatitude !== null &&
-      order.courier?.lastLongitude !== null;
+    const canTrackCourier = Boolean(
+      order.courier &&
+        (order.status === 'ASSIGNED' || order.status === 'PICKED_UP') &&
+        order.courier.lastLatitude !== null &&
+        order.courier.lastLongitude !== null,
+    );
 
     return {
       ...this.serializeOrder(order),
