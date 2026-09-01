@@ -46,6 +46,8 @@ export function RouteMap({ pickup, dropoff, className = '' }: RouteMapProps) {
 
   useEffect(() => {
     if (!apiKey || !containerRef.current || !pickupPoint || !dropoffPoint) return;
+    const pickupCoordinate = pickupPoint;
+    const dropoffCoordinate = dropoffPoint;
 
     let disposed = false;
     let map: { remove: () => void } | null = null;
@@ -60,7 +62,7 @@ export function RouteMap({ pickup, dropoff, className = '' }: RouteMapProps) {
         const nextMap = new maplibregl.Map({
           container: containerRef.current,
           style: 'https://static.neshan.org/sdk/maplibre/styles/light.json',
-          center: [pickupPoint.longitude, pickupPoint.latitude],
+          center: [pickupCoordinate.longitude, pickupCoordinate.latitude],
           zoom: 13,
           apiKey,
           logoPosition: 'bottom-left',
@@ -68,16 +70,16 @@ export function RouteMap({ pickup, dropoff, className = '' }: RouteMapProps) {
         });
 
         new maplibregl.Marker({ element: markerElement('pickup') })
-          .setLngLat([pickupPoint.longitude, pickupPoint.latitude])
-          .setPopup(new maplibregl.Popup({ offset: 24 }).setText(pickupPoint.title ?? 'مبدا'))
+          .setLngLat([pickupCoordinate.longitude, pickupCoordinate.latitude])
+          .setPopup(new maplibregl.Popup({ offset: 24 }).setText(pickupCoordinate.title ?? 'مبدا'))
           .addTo(nextMap);
         new maplibregl.Marker({ element: markerElement('dropoff') })
-          .setLngLat([dropoffPoint.longitude, dropoffPoint.latitude])
-          .setPopup(new maplibregl.Popup({ offset: 24 }).setText(dropoffPoint.title ?? 'مقصد'))
+          .setLngLat([dropoffCoordinate.longitude, dropoffCoordinate.latitude])
+          .setPopup(new maplibregl.Popup({ offset: 24 }).setText(dropoffCoordinate.title ?? 'مقصد'))
           .addTo(nextMap);
 
-        bounds.extend([pickupPoint.longitude, pickupPoint.latitude]);
-        bounds.extend([dropoffPoint.longitude, dropoffPoint.latitude]);
+        bounds.extend([pickupCoordinate.longitude, pickupCoordinate.latitude]);
+        bounds.extend([dropoffCoordinate.longitude, dropoffCoordinate.latitude]);
         nextMap.once('load', () => {
           if (!disposed) nextMap.fitBounds(bounds, { padding: 54, maxZoom: 15, duration: 0 });
         });
