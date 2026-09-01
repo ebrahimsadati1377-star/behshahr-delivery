@@ -17,6 +17,7 @@ apps/api/src/generated/prisma/
 .env.*
 !.env.example
 ops/production.env
+ops/dekan.env
 
 # logs
 *.log
