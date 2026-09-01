@@ -1,0 +1,12 @@
+[Unit]
+Description=Behshahr Delivery PostgreSQL backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/behshahr-delivery
+Environment=ENV_FILE=ops/production.env
+Environment=BACKUP_DIR=/var/backups/behshahr-delivery
+ExecStart=/usr/bin/bash ops/backup-postgres.sh
+User=root
