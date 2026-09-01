@@ -32,7 +32,7 @@ Goal: make the repository safe and predictable for parallel development.
 - [x] OTP request/attempt rate limits
 - [x] authorization guards and role metadata
 - [x] development SMS provider adapter
-- [ ] production SMS provider implementation
+- [x] production SMS provider implementation (IPPanel pattern OTP)
 
 ## Phase 3 — Customer Order Flow
 

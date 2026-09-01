@@ -45,6 +45,8 @@ export class AuthService {
     const phone = this.normalizePhone(dto.phone);
     const fingerprint = this.phoneFingerprint(phone);
     const cooldownKey = `auth:otp:cooldown:${fingerprint}`;
+    const codeKey = `auth:otp:code:${fingerprint}`;
+    const attemptsKey = `auth:otp:attempts:${fingerprint}`;
 
     const acquired = await this.redis.setIfAbsent(
       cooldownKey,
@@ -64,6 +66,7 @@ export class AuthService {
     const hourlyCount = await this.redis.incrementWithExpiry(hourlyKey, 3_600);
 
     if (hourlyCount > OTP_MAX_REQUESTS_PER_HOUR) {
+      await this.redis.delete(cooldownKey);
       throw new HttpException(
         'Too many OTP requests',
         HttpStatus.TOO_MANY_REQUESTS,
@@ -74,11 +77,16 @@ export class AuthService {
     const digest = this.otpDigest(phone, code);
 
     await Promise.all([
-      this.redis.setEx(`auth:otp:code:${fingerprint}`, OTP_TTL_SECONDS, digest),
-      this.redis.delete(`auth:otp:attempts:${fingerprint}`),
+      this.redis.setEx(codeKey, OTP_TTL_SECONDS, digest),
+      this.redis.delete(attemptsKey),
     ]);
 
-    await this.smsProvider.sendOtp(phone, code);
+    try {
+      await this.smsProvider.sendOtp(phone, code);
+    } catch (error) {
+      await this.redis.delete(codeKey, attemptsKey, cooldownKey);
+      throw error;
+    }
 
     return {
       status: 'sent',
