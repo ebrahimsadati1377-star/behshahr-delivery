@@ -23,7 +23,6 @@ set +a
 required=(
   POSTGRES_PASSWORD OTP_SECRET JWT_ACCESS_SECRET JWT_REFRESH_SECRET
   IPPANEL_API_KEY IPPANEL_FROM_NUMBER IPPANEL_OTP_PATTERN_CODE
-  NEXT_PUBLIC_NESHAN_MAP_KEY
 )
 
 for name in "${required[@]}"; do
@@ -37,10 +36,19 @@ for name in POSTGRES_PASSWORD OTP_SECRET JWT_ACCESS_SECRET JWT_REFRESH_SECRET; d
   (( ${#value} >= 32 )) || fail "$name must be at least 32 characters"
 done
 
+# The client map key is optional for a co-hosted Dekan pilot. The courier app
+# falls back gracefully when no web map key is configured.
+if [[ -n "${NEXT_PUBLIC_NESHAN_MAP_KEY:-}" && "${NEXT_PUBLIC_NESHAN_MAP_KEY}" == *"CHANGE_ME"* ]]; then
+  fail "NEXT_PUBLIC_NESHAN_MAP_KEY is optional, but must be empty or a real key (not a placeholder)"
+fi
+
 routing="${ROUTING_PROVIDER:-auto}"
 [[ "$routing" == "approximate" || "$routing" == "neshan" || "$routing" == "auto" ]] || fail "ROUTING_PROVIDER must be approximate, neshan, or auto"
 if [[ "$routing" == "neshan" ]]; then
   [[ -n "${NESHAN_SERVICE_API_KEY:-}" && "${NESHAN_SERVICE_API_KEY}" != *"CHANGE_ME"* ]] || fail "NESHAN_SERVICE_API_KEY is required for ROUTING_PROVIDER=neshan"
+fi
+if [[ "$routing" == "auto" && -n "${NESHAN_SERVICE_API_KEY:-}" && "${NESHAN_SERVICE_API_KEY}" == *"CHANGE_ME"* ]]; then
+  fail "NESHAN_SERVICE_API_KEY must be empty or a real key when ROUTING_PROVIDER=auto"
 fi
 
 for port in "${DEKAN_API_PORT:-4000}" "${DEKAN_COURIER_PORT:-3001}" "${DEKAN_ADMIN_PORT:-3002}"; do
