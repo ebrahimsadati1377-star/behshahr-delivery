@@ -137,12 +137,31 @@ model Order {
   pricingRule              PricingRule? @relation(fields: [pricingRuleId], references: [id], onDelete: SetNull)
   events                   OrderEvent[]
   payment                  Payment?
+  externalLink             ExternalOrderLink?
 
   @@index([customerId, createdAt])
   @@index([courierId, status])
   @@index([pricingRuleId])
   @@index([status, createdAt])
   @@map("orders")
+}
+
+model ExternalOrderLink {
+  id              String   @id @default(uuid()) @db.Uuid
+  provider        String   @db.VarChar(40)
+  storeId         String   @map("store_id") @db.VarChar(80)
+  externalOrderId String   @map("external_order_id") @db.VarChar(120)
+  orderId         String   @unique @map("order_id") @db.Uuid
+  recipientName   String?  @map("recipient_name") @db.VarChar(160)
+  recipientPhone  String?  @map("recipient_phone") @db.VarChar(20)
+  sourcePayload   Json?    @map("source_payload") @db.JsonB
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+  order           Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, storeId, externalOrderId])
+  @@index([storeId, createdAt])
+  @@map("external_order_links")
 }
 
 model OrderEvent {
