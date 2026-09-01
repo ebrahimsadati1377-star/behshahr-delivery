@@ -81,7 +81,10 @@ services:
       IPPANEL_OTP_PARAM_NAME: ${IPPANEL_OTP_PARAM_NAME:-code}
       IPPANEL_API_BASE_URL: ${IPPANEL_API_BASE_URL:-https://edge.ippanel.com}
       IPPANEL_TIMEOUT_MS: ${IPPANEL_TIMEOUT_MS:-5000}
-      ROUTING_PROVIDER: ${ROUTING_PROVIDER:-auto}
+      ROUTING_PROVIDER: ${ROUTING_PROVIDER:-mapir}
+      MAPIR_API_KEY: ${MAPIR_API_KEY:?MAPIR_API_KEY is required}
+      MAPIR_API_BASE_URL: ${MAPIR_API_BASE_URL:-https://map.ir}
+      MAPIR_ROUTING_TIMEOUT_MS: ${MAPIR_ROUTING_TIMEOUT_MS:-5000}
       NESHAN_SERVICE_API_KEY: ${NESHAN_SERVICE_API_KEY:-}
       NESHAN_API_BASE_URL: ${NESHAN_API_BASE_URL:-https://api.neshan.org}
       NESHAN_ROUTING_TIMEOUT_MS: ${NESHAN_ROUTING_TIMEOUT_MS:-5000}
@@ -113,7 +116,7 @@ services:
       args:
         APP_FILTER: "@behshahr-delivery/courier"
         APP_PORT: "3001"
-        NEXT_PUBLIC_NESHAN_MAP_KEY: ${NEXT_PUBLIC_NESHAN_MAP_KEY:-}
+        NEXT_PUBLIC_MAPIR_API_KEY: ${MAPIR_API_KEY:?MAPIR_API_KEY is required}
     restart: unless-stopped
     mem_limit: 256m
     cpus: 0.25
