@@ -49,6 +49,19 @@ enum ActorType {
   ADMIN
 }
 
+enum PaymentMethod {
+  CASH
+  ONLINE
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
 model User {
   id             String      @id @default(uuid()) @db.Uuid
   phone          String      @unique @db.VarChar(20)
@@ -123,6 +136,7 @@ model Order {
   courier                  Courier?     @relation("CourierOrders", fields: [courierId], references: [id], onDelete: SetNull)
   pricingRule              PricingRule? @relation(fields: [pricingRuleId], references: [id], onDelete: SetNull)
   events                   OrderEvent[]
+  payment                  Payment?
 
   @@index([customerId, createdAt])
   @@index([courierId, status])
@@ -145,6 +159,40 @@ model OrderEvent {
 
   @@index([orderId, createdAt])
   @@map("order_events")
+}
+
+model Payment {
+  id                String        @id @default(uuid()) @db.Uuid
+  orderId           String        @unique @map("order_id") @db.Uuid
+  method            PaymentMethod
+  status            PaymentStatus @default(PENDING)
+  amount             BigInt
+  provider           String?       @db.VarChar(80)
+  providerReference String?       @map("provider_reference") @db.VarChar(160)
+  paidAt             DateTime?     @map("paid_at")
+  createdAt          DateTime      @default(now()) @map("created_at")
+  updatedAt          DateTime      @updatedAt @map("updated_at")
+  order              Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  events             PaymentEvent[]
+
+  @@index([status, createdAt])
+  @@map("payments")
+}
+
+model PaymentEvent {
+  id         BigInt         @id @default(autoincrement())
+  paymentId  String         @map("payment_id") @db.Uuid
+  actorType  ActorType      @map("actor_type")
+  actorId    String?        @map("actor_id") @db.Uuid
+  eventType  String         @map("event_type") @db.VarChar(80)
+  fromStatus PaymentStatus? @map("from_status")
+  toStatus   PaymentStatus? @map("to_status")
+  metadata   Json?          @db.JsonB
+  createdAt  DateTime       @default(now()) @map("created_at")
+  payment    Payment        @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId, createdAt])
+  @@map("payment_events")
 }
 
 model PricingRule {
