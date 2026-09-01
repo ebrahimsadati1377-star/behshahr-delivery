@@ -1,8 +1,12 @@
-import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 export class CreateOrderDto {
   @IsUUID('4')
   quoteId!: string;
+
+  @IsOptional()
+  @IsIn(['CASH', 'ONLINE'])
+  paymentMethod?: 'CASH' | 'ONLINE';
 
   @IsOptional()
   @IsString()

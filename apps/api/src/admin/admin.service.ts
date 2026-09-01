@@ -3,6 +3,18 @@ import { PrismaService } from '../database/prisma.service';
 import { Prisma } from '../generated/prisma/client';
 import { AssignOrderDto } from './dto/assign-order.dto';
 
+type AdminPaymentSource = {
+  id: string;
+  method: string;
+  status: string;
+  amount: bigint;
+  provider: string | null;
+  providerReference: string | null;
+  paidAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 @Injectable()
 export class AdminService {
   constructor(private readonly prisma: PrismaService) {}
@@ -14,6 +26,7 @@ export class AdminService {
         courier: {
           include: { user: { select: { id: true, phone: true } } },
         },
+        payment: true,
       },
       orderBy: { createdAt: 'desc' },
       take: 100,
@@ -29,6 +42,9 @@ export class AdminService {
         customer: { select: { id: true, phone: true } },
         courier: {
           include: { user: { select: { id: true, phone: true } } },
+        },
+        payment: {
+          include: { events: { orderBy: { createdAt: 'asc' } } },
         },
         events: { orderBy: { createdAt: 'asc' } },
       },
@@ -48,6 +64,21 @@ export class AdminService {
         metadata: event.metadata,
         createdAt: event.createdAt,
       })),
+      payment: order.payment
+        ? {
+            ...this.serializePayment(order.payment),
+            events: order.payment.events.map((event) => ({
+              id: event.id.toString(),
+              actorType: event.actorType,
+              actorId: event.actorId,
+              eventType: event.eventType,
+              fromStatus: event.fromStatus,
+              toStatus: event.toStatus,
+              metadata: event.metadata,
+              createdAt: event.createdAt,
+            })),
+          }
+        : null,
     };
   }
 
@@ -187,6 +218,7 @@ export class AdminService {
       include: {
         customer: { select: { id: true, phone: true } },
         courier: { include: { user: { select: { id: true, phone: true } } } },
+        payment: true,
       },
     });
     return this.serializeOrder(order);
@@ -205,6 +237,7 @@ export class AdminService {
       status: string;
       user?: { phone: string } | null;
     } | null;
+    payment?: AdminPaymentSource | null;
     vehicleType: string;
     pickupSnapshot: unknown;
     dropoffSnapshot: unknown;
@@ -236,6 +269,7 @@ export class AdminService {
             status: order.courier.status,
           }
         : null,
+      payment: order.payment ? this.serializePayment(order.payment) : null,
       vehicleType: order.vehicleType,
       pickupSnapshot: order.pickupSnapshot,
       dropoffSnapshot: order.dropoffSnapshot,
@@ -251,6 +285,21 @@ export class AdminService {
       deliveredAt: order.deliveredAt,
       cancelledAt: order.cancelledAt,
       updatedAt: order.updatedAt,
+    };
+  }
+
+  private serializePayment(payment: AdminPaymentSource) {
+    return {
+      id: payment.id,
+      method: payment.method,
+      status: payment.status,
+      amountToman: Number(payment.amount),
+      currency: 'TOMAN',
+      provider: payment.provider,
+      providerReference: payment.providerReference,
+      paidAt: payment.paidAt,
+      createdAt: payment.createdAt,
+      updatedAt: payment.updatedAt,
     };
   }
 }

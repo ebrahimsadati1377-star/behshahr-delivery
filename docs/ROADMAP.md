@@ -79,14 +79,15 @@ Goal: make the repository safe and predictable for parallel development.
 - [x] realtime order updates via SSE
 - [x] realtime customer tracking screen
 - [x] courier location heartbeat exposed to tracking
-- [ ] SMS/push adapter and critical notifications
+- [ ] critical operational SMS/push notifications beyond OTP
 
 ## Phase 7 — Payment
 
-- [ ] payment adapter
-- [ ] online payment initiation/verification
-- [ ] payment state audit trail
-- [ ] cash/manual payment option if business requires it
+- [x] payment domain linked one-to-one with orders
+- [x] audited payment state transitions
+- [x] cash-on-delivery pilot payment flow
+- [x] admin cash-receipt confirmation
+- [ ] online payment gateway initiation/verification (not required for controlled pilot)
 
 ## Phase 8 — Pilot Hardening
 

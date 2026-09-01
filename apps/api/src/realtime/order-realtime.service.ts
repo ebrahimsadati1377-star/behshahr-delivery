@@ -3,7 +3,8 @@ import { Observable, Subject } from 'rxjs';
 
 export type OrderRealtimeReason =
   | 'ORDER_STATUS'
-  | 'COURIER_LOCATION';
+  | 'COURIER_LOCATION'
+  | 'PAYMENT_STATUS';
 
 export interface OrderRealtimeSignal {
   orderId: string;
