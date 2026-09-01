@@ -1,0 +1,128 @@
+name: Admin Pricing
+
+on:
+  pull_request:
+    paths:
+      - "apps/admin/**"
+      - "apps/api/src/admin/**"
+      - "apps/api/src/quotes/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/admin-pricing.yml"
+
+jobs:
+  verify-admin-pricing:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/behshahr_delivery?schema=public
+      REDIS_URL: redis://localhost:6379
+      API_PORT: 4000
+      API_INTERNAL_URL: http://127.0.0.1:4000/api
+      NODE_ENV: test
+      SMS_PROVIDER: console
+      DEV_OTP_CODE: "123456"
+      OTP_SECRET: ci-otp-secret-change-me
+      JWT_ACCESS_SECRET: ci-access-secret-change-me
+      JWT_REFRESH_SECRET: ci-refresh-secret-change-me
+      SERVICE_CENTER_LAT: "36.700000"
+      SERVICE_CENTER_LNG: "53.550000"
+      SERVICE_RADIUS_METERS: "20000"
+      ROUTE_DISTANCE_FACTOR: "1.25"
+      ROUTE_AVG_SPEED_KMH: "25"
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: behshahr_delivery
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d behshahr_delivery"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm --filter @behshahr-delivery/api prisma:migrate:deploy
+      - name: Seed pricing admin
+        run: |
+          pnpm --filter @behshahr-delivery/api exec node <<'NODE'
+          const { Client } = require('pg');
+          (async () => {
+            const db = new Client({ connectionString: process.env.DATABASE_URL });
+            await db.connect();
+            await db.query(`
+              INSERT INTO "pricing_rules" ("id","vehicle_type","base_fare","included_distance_meters","per_km_fare","minimum_fare","surge_multiplier","is_active","created_at","updated_at")
+              VALUES ('00000000-0000-4000-8000-000000000701','MOTORBIKE',50000,1000,15000,50000,1.00,true,NOW(),NOW());
+              INSERT INTO "users" ("id","phone","role","status","created_at","updated_at") VALUES
+                ('00000000-0000-4000-8000-000000000710','+989113333333','ADMIN','ACTIVE',NOW(),NOW());
+            `);
+            await db.end();
+          })().catch((e) => { console.error(e); process.exit(1); });
+          NODE
+      - run: pnpm --filter @behshahr-delivery/api build
+      - run: pnpm --filter @behshahr-delivery/admin typecheck
+      - run: pnpm --filter @behshahr-delivery/admin build
+      - name: Smoke test pricing lifecycle
+        run: |
+          pnpm --filter @behshahr-delivery/api start > /tmp/pricing-api.log 2>&1 &
+          API_PID=$!
+          pnpm --filter @behshahr-delivery/admin start > /tmp/pricing-web.log 2>&1 &
+          WEB_PID=$!
+          trap 'kill $API_PID $WEB_PID || true' EXIT
+
+          for attempt in {1..30}; do
+            curl --fail --silent http://127.0.0.1:4000/api/health >/dev/null && curl --fail --silent http://127.0.0.1:3002/pricing >/dev/null && break
+            sleep 1
+          done
+
+          node <<'NODE'
+          const web = 'http://127.0.0.1:3002';
+          async function json(url, options = {}, expected) {
+            const response = await fetch(url, options);
+            const body = await response.json().catch(() => ({}));
+            if (expected !== undefined && response.status !== expected) throw new Error(`${url} expected ${expected}, got ${response.status}: ${JSON.stringify(body)}`);
+            if (expected === undefined && !response.ok) throw new Error(`${url} failed ${response.status}: ${JSON.stringify(body)}`);
+            return { response, body };
+          }
+
+          const outsider = '+989112227777';
+          await json(`${web}/api/session/request-otp`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({phone:outsider}) });
+          await json(`${web}/api/session/verify-otp`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({phone:outsider,code:'123456'}) }, 403);
+
+          const phone = '+989113333333';
+          await json(`${web}/api/session/request-otp`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({phone}) });
+          const verified = await json(`${web}/api/session/verify-otp`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({phone,code:'123456'}) });
+          const cookies = typeof verified.response.headers.getSetCookie === 'function' ? verified.response.headers.getSetCookie() : [];
+          const cookie = cookies.map(v => v.split(';')[0]).join('; ');
+          if (!cookie) throw new Error('admin session cookies missing');
+          const headers = { cookie, 'content-type':'application/json' };
+
+          const before = (await json(`${web}/api/admin/pricing-rules`, { headers })).body;
+          if (!Array.isArray(before) || before.length !== 1 || !before[0].isActive) throw new Error('seed pricing rule missing');
+
+          const created = (await json(`${web}/api/admin/pricing-rules`, {
+            method:'POST', headers,
+            body:JSON.stringify({vehicleType:'MOTORBIKE',baseFare:65000,includedDistanceMeters:1200,perKmFare:18000,minimumFare:65000,surgeMultiplier:1.1})
+          })).body;
+          if (!created.id || !created.isActive || created.baseFareToman !== 65000) throw new Error(`pricing publish failed ${JSON.stringify(created)}`);
+
+          const after = (await json(`${web}/api/admin/pricing-rules`, { headers })).body;
+          const oldRule = after.find(rule => rule.id === '00000000-0000-4000-8000-000000000701');
+          const newRule = after.find(rule => rule.id === created.id);
+          if (!oldRule || oldRule.isActive || !newRule?.isActive) throw new Error('pricing history/activation state incorrect');
+
+          const deactivated = (await json(`${web}/api/admin/pricing-rules/${created.id}/deactivate`, { method:'POST', headers })).body;
+          if (deactivated.isActive) throw new Error('pricing deactivation failed');
+          NODE
