@@ -4,6 +4,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { OrderRealtimeService } from '../realtime/order-realtime.service';
 import { AdminService } from './admin.service';
 import { AssignOrderDto } from './dto/assign-order.dto';
 
@@ -11,7 +12,10 @@ import { AssignOrderDto } from './dto/assign-order.dto';
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('ADMIN')
 export class AdminController {
-  constructor(private readonly admin: AdminService) {}
+  constructor(
+    private readonly admin: AdminService,
+    private readonly realtime: OrderRealtimeService,
+  ) {}
 
   @Get('orders')
   orders() {
@@ -29,20 +33,24 @@ export class AdminController {
   }
 
   @Post('orders/:id/assign')
-  assignOrder(
+  async assignOrder(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') orderId: string,
     @Body() dto: AssignOrderDto,
   ) {
-    return this.admin.assignOrder(user.id, orderId, dto);
+    const result = await this.admin.assignOrder(user.id, orderId, dto);
+    this.realtime.publish(orderId, 'ORDER_STATUS');
+    return result;
   }
 
   @Post('orders/:id/reassign')
-  reassignOrder(
+  async reassignOrder(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') orderId: string,
     @Body() dto: AssignOrderDto,
   ) {
-    return this.admin.reassignOrder(user.id, orderId, dto);
+    const result = await this.admin.reassignOrder(user.id, orderId, dto);
+    this.realtime.publish(orderId, 'ORDER_STATUS');
+    return result;
   }
 }

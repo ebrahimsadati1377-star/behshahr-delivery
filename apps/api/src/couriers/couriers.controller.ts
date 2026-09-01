@@ -4,6 +4,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { OrderRealtimeService } from '../realtime/order-realtime.service';
 import { CouriersService } from './couriers.service';
 import { UpdateCourierAvailabilityDto } from './dto/update-availability.dto';
 import { UpdateCourierLocationDto } from './dto/update-location.dto';
@@ -12,7 +13,10 @@ import { UpdateCourierLocationDto } from './dto/update-location.dto';
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('COURIER')
 export class CouriersController {
-  constructor(private readonly couriers: CouriersService) {}
+  constructor(
+    private readonly couriers: CouriersService,
+    private readonly realtime: OrderRealtimeService,
+  ) {}
 
   @Get('profile')
   profile(@CurrentUser() user: AuthenticatedUser) {
@@ -28,11 +32,16 @@ export class CouriersController {
   }
 
   @Post('location')
-  updateLocation(
+  async updateLocation(
     @CurrentUser() user: AuthenticatedUser,
     @Body() dto: UpdateCourierLocationDto,
   ) {
-    return this.couriers.updateLocation(user.id, dto);
+    const result = await this.couriers.updateLocation(user.id, dto);
+    const activeOrder = await this.couriers.currentOrder(user.id);
+    if (activeOrder) {
+      this.realtime.publish(activeOrder.id, 'COURIER_LOCATION');
+    }
+    return result;
   }
 
   @Get('orders/available')
@@ -46,34 +55,42 @@ export class CouriersController {
   }
 
   @Post('orders/:id/accept')
-  acceptOrder(
+  async acceptOrder(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') orderId: string,
   ) {
-    return this.couriers.acceptOrder(user.id, orderId);
+    const result = await this.couriers.acceptOrder(user.id, orderId);
+    this.realtime.publish(orderId, 'ORDER_STATUS');
+    return result;
   }
 
   @Post('orders/:id/reject')
-  rejectAssignedOrder(
+  async rejectAssignedOrder(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') orderId: string,
   ) {
-    return this.couriers.rejectAssignedOrder(user.id, orderId);
+    const result = await this.couriers.rejectAssignedOrder(user.id, orderId);
+    this.realtime.publish(orderId, 'ORDER_STATUS');
+    return result;
   }
 
   @Post('orders/:id/picked-up')
-  markPickedUp(
+  async markPickedUp(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') orderId: string,
   ) {
-    return this.couriers.markPickedUp(user.id, orderId);
+    const result = await this.couriers.markPickedUp(user.id, orderId);
+    this.realtime.publish(orderId, 'ORDER_STATUS');
+    return result;
   }
 
   @Post('orders/:id/delivered')
-  markDelivered(
+  async markDelivered(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') orderId: string,
   ) {
-    return this.couriers.markDelivered(user.id, orderId);
+    const result = await this.couriers.markDelivered(user.id, orderId);
+    this.realtime.publish(orderId, 'ORDER_STATUS');
+    return result;
   }
 }

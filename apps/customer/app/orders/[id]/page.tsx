@@ -46,6 +46,8 @@ interface OrderDetail {
   events: OrderEvent[];
 }
 
+type StreamState = 'idle' | 'connecting' | 'live' | 'reconnecting';
+
 const statusLabels: Record<string, string> = {
   REQUESTED: 'در انتظار پیک',
   ASSIGNED: 'پیک اختصاص یافت',
@@ -66,6 +68,8 @@ const eventLabels: Record<string, string> = {
   ORDER_CANCELLED_BY_CUSTOMER: 'سفارش توسط مشتری لغو شد',
 };
 
+const terminalStatuses = new Set(['DELIVERED', 'CANCELLED', 'FAILED']);
+
 function toman(value: number) {
   return new Intl.NumberFormat('fa-IR').format(value);
 }
@@ -76,6 +80,7 @@ export default function OrderDetailPage() {
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [cancelling, setCancelling] = useState(false);
+  const [streamState, setStreamState] = useState<StreamState>('idle');
   const [error, setError] = useState('');
 
   const load = useCallback(async () => {
@@ -93,9 +98,45 @@ export default function OrderDetailPage() {
     load()
       .catch((cause) => setError(cause instanceof Error ? cause.message : 'خطا در دریافت سفارش'))
       .finally(() => setLoading(false));
-    const timer = window.setInterval(() => void load().catch(() => undefined), 15000);
-    return () => window.clearInterval(timer);
   }, [load]);
+
+  const isTerminal = order ? terminalStatuses.has(order.status) : false;
+
+  useEffect(() => {
+    if (!order || isTerminal) {
+      setStreamState('idle');
+      return;
+    }
+
+    setStreamState('connecting');
+    const source = new EventSource(`/api/customer/orders/${params.id}/stream`);
+
+    source.onopen = () => setStreamState('live');
+    source.onerror = () => setStreamState('reconnecting');
+
+    const onOrder = (event: MessageEvent<string>) => {
+      try {
+        const nextOrder = JSON.parse(event.data) as OrderDetail;
+        setOrder(nextOrder);
+        setError('');
+        setStreamState('live');
+      } catch {
+        // Keep the previous valid snapshot if an unexpected event is received.
+      }
+    };
+
+    source.addEventListener('order', onOrder as EventListener);
+
+    const safetyRefresh = window.setInterval(() => {
+      void load().catch(() => undefined);
+    }, 60_000);
+
+    return () => {
+      source.removeEventListener('order', onOrder as EventListener);
+      source.close();
+      window.clearInterval(safetyRefresh);
+    };
+  }, [isTerminal, load, order?.id, params.id]);
 
   async function cancelOrder() {
     if (!order || !window.confirm('این درخواست ارسال لغو شود؟')) return;
@@ -181,7 +222,15 @@ export default function OrderDetailPage() {
           {order.status === 'REQUESTED' ? (
             <button className="danger-button" type="button" disabled={cancelling} onClick={cancelOrder}>{cancelling ? 'در حال لغو…' : 'لغو درخواست ارسال'}</button>
           ) : null}
-          {['ASSIGNED', 'PICKED_UP'].includes(order.status) ? <p className="muted center-text">موقعیت پیک و وضعیت این صفحه هر ۱۵ ثانیه بروزرسانی می‌شود.</p> : null}
+          {!isTerminal ? (
+            <p className="muted center-text">
+              {streamState === 'live'
+                ? 'بروزرسانی زنده وضعیت و موقعیت پیک فعال است.'
+                : streamState === 'reconnecting'
+                  ? 'اتصال زنده در حال بازیابی است؛ بروزرسانی پشتیبان فعال می‌ماند.'
+                  : 'در حال اتصال به بروزرسانی زنده…'}
+            </p>
+          ) : null}
         </>
       ) : null}
     </main>
