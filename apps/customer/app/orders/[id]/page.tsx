@@ -29,6 +29,14 @@ interface CourierTracking {
   lastSeenAt: string | null;
 }
 
+interface Payment {
+  id: string;
+  method: string;
+  status: string;
+  amountToman: number;
+  paidAt: string | null;
+}
+
 interface OrderDetail {
   id: string;
   publicCode: string;
@@ -40,6 +48,7 @@ interface OrderDetail {
   estimatedDurationSeconds: number | null;
   quotedPriceToman: number;
   finalPriceToman: number | null;
+  payment: Payment | null;
   notes: string | null;
   createdAt: string;
   courierTracking: CourierTracking | null;
@@ -57,6 +66,14 @@ const statusLabels: Record<string, string> = {
   FAILED: 'ناموفق',
 };
 
+const paymentLabels: Record<string, string> = {
+  PENDING: 'در انتظار دریافت وجه',
+  PAID: 'پرداخت شده',
+  FAILED: 'ناموفق',
+  CANCELLED: 'لغو شده',
+  REFUNDED: 'برگشت وجه',
+};
+
 const eventLabels: Record<string, string> = {
   ORDER_REQUESTED: 'درخواست ارسال ثبت شد',
   ORDER_ACCEPTED_BY_COURIER: 'پیک سفارش را پذیرفت',
@@ -66,6 +83,7 @@ const eventLabels: Record<string, string> = {
   ORDER_PICKED_UP: 'بسته توسط پیک دریافت شد',
   ORDER_DELIVERED: 'بسته تحویل داده شد',
   ORDER_CANCELLED_BY_CUSTOMER: 'سفارش توسط مشتری لغو شد',
+  ORDER_PAYMENT_MARKED_PAID: 'دریافت وجه توسط اپراتور ثبت شد',
 };
 
 const terminalStatuses = new Set(['DELIVERED', 'CANCELLED', 'FAILED']);
@@ -197,6 +215,8 @@ export default function OrderDetailPage() {
 
             <div className="stat-grid">
               <div><span>هزینه</span><strong>{toman(order.finalPriceToman ?? order.quotedPriceToman)} تومان</strong></div>
+              <div><span>پرداخت</span><strong>{order.payment ? paymentLabels[order.payment.status] ?? order.payment.status : '—'}</strong></div>
+              <div><span>روش پرداخت</span><strong>{order.payment?.method === 'CASH' ? 'نقدی هنگام تحویل' : 'آنلاین'}</strong></div>
               <div><span>وسیله</span><strong>{order.vehicleType === 'MOTORBIKE' ? 'موتور' : 'خودرو'}</strong></div>
               <div><span>فاصله</span><strong>{(order.distanceMeters / 1000).toLocaleString('fa-IR', { maximumFractionDigits: 1 })} کیلومتر</strong></div>
               <div><span>زمان تخمینی</span><strong>{order.estimatedDurationSeconds ? `${Math.max(1, Math.round(order.estimatedDurationSeconds / 60)).toLocaleString('fa-IR')} دقیقه` : '—'}</strong></div>
