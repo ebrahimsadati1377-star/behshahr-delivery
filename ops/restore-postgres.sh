@@ -55,7 +55,7 @@ fi
 
 "${COMPOSE[@]}" up -d api customer courier admin caddy
 
-for attempt in {1..30}; do
+for _ in {1..30}; do
   if "${COMPOSE[@]}" exec -T api node -e "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
     echo "[restore] restore complete and API healthy"
     exit 0
