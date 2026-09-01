@@ -10,6 +10,11 @@
     "test": "turbo test",
     "typecheck": "turbo typecheck"
   },
+  "pnpm": {
+    "overrides": {
+      "deepmerge-ts": "8.0.0"
+    }
+  },
   "devDependencies": {
     "turbo": "^2.5.0"
   }

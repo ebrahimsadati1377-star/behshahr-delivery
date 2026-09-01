@@ -91,13 +91,28 @@ Goal: make the repository safe and predictable for parallel development.
 
 ## Phase 8 — Pilot Hardening
 
-- [ ] security review
-- [ ] load test for expected pilot traffic
-- [ ] backup/restore procedure
-- [ ] production Docker deployment
-- [ ] monitoring and alerting
-- [ ] admin runbook
-- [ ] Behshahr pilot launch checklist
+Repository-side launch package:
+
+- [x] security review and explicit pilot go/no-go controls
+- [x] reproducible dependency lockfile and frozen production builds
+- [x] load-test tooling with p95/error-rate gates
+- [x] verified backup/restore tooling and CI restore-drill definition
+- [x] production Docker/Compose/Caddy deployment package
+- [x] health monitoring and alert-webhook foundation
+- [x] automated daily backup and minute-level health timers
+- [x] admin/operations runbook and rollback procedure
+- [x] Behshahr pilot launch checklist
+- [x] safe initial ADMIN/COURIER provisioning tooling
+
+Live go-live gates that require external production infrastructure or field access:
+
+- [ ] deploy the release to the actual production host and DNS
+- [ ] configure real IPPanel and Neshan credentials on the production host
+- [ ] verify public TLS and production health monitoring
+- [ ] copy a verified production backup off-host and complete a non-production restore drill
+- [ ] run the load baseline against the actual production host
+- [ ] complete the real-phone / real-courier field acceptance test
+- [ ] open the controlled Behshahr pilot
 
 ## Post-MVP
 

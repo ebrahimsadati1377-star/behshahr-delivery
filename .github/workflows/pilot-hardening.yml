@@ -1,0 +1,210 @@
+name: Pilot Hardening
+
+on:
+  pull_request:
+    paths:
+      - 'apps/**'
+      - 'ops/**'
+      - 'docs/**'
+      - 'docker-compose.production.yml'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/pilot-hardening.yml'
+  workflow_dispatch:
+
+jobs:
+  verify-pilot-hardening:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate shell scripts
+        run: |
+          bash -n ops/*.sh
+          shellcheck -x -e SC1091,SC2317 ops/*.sh
+
+      - name: Refuse obvious committed secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -I -n -E '(sk-[A-Za-z0-9_-]{20,}|-----BEGIN (RSA|OPENSSH|EC) PRIVATE KEY-----)' -- ':!*.md'; then
+            echo 'Potential secret/private key detected in tracked files' >&2
+            exit 1
+          fi
+
+      - name: Create CI production environment
+        run: |
+          cat > ops/production.env <<'ENV'
+          CUSTOMER_DOMAIN=customer.ci.invalid
+          COURIER_DOMAIN=courier.ci.invalid
+          ADMIN_DOMAIN=admin.ci.invalid
+          ACME_EMAIL=ci@behshahr.invalid
+          POSTGRES_PASSWORD=ci-production-postgres-password
+          DATABASE_URL=postgresql://postgres:ci-production-postgres-password@postgres:5432/behshahr_delivery?schema=public
+          OTP_SECRET=ci-otp-secret-0123456789abcdef0123456789abcdef
+          JWT_ACCESS_SECRET=ci-access-secret-0123456789abcdef0123456789abcdef
+          JWT_REFRESH_SECRET=ci-refresh-secret-0123456789abcdef0123456789abcdef
+          IPPANEL_API_KEY=ci-ippanel-key-not-a-real-secret
+          IPPANEL_FROM_NUMBER=+982100000000
+          IPPANEL_OTP_PATTERN_CODE=ci-pattern-code
+          IPPANEL_OTP_PARAM_NAME=code
+          IPPANEL_API_BASE_URL=https://edge.ippanel.com
+          IPPANEL_TIMEOUT_MS=1000
+          ROUTING_PROVIDER=auto
+          NESHAN_SERVICE_API_KEY=ci-neshan-service-key
+          NESHAN_API_BASE_URL=https://api.neshan.org
+          NESHAN_ROUTING_TIMEOUT_MS=1000
+          NEXT_PUBLIC_NESHAN_MAP_KEY=ci-neshan-map-key
+          SERVICE_CENTER_LAT=36.6980
+          SERVICE_CENTER_LNG=53.5520
+          SERVICE_RADIUS_METERS=15000
+          ROUTE_DISTANCE_FACTOR=1.25
+          ROUTE_AVG_SPEED_KMH=25
+          BACKUP_RETENTION_DAYS=14
+          ENV
+          chmod 600 ops/production.env
+
+      - name: Production preflight and Compose validation
+        run: |
+          ENV_FILE=ops/production.env bash ops/preflight.sh
+          docker compose --env-file ops/production.env -f docker-compose.production.yml config --quiet
+          docker compose --env-file ops/production.env -f docker-compose.production.yml run --rm --no-deps caddy \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+      - name: Build production images with frozen lockfile
+        run: |
+          docker compose --env-file ops/production.env -f docker-compose.production.yml build \
+            api customer courier admin migrate
+
+      - name: Start production data services
+        run: |
+          docker compose --env-file ops/production.env -f docker-compose.production.yml up -d postgres redis
+          for attempt in {1..30}; do
+            pg="$(docker inspect --format='{{.State.Health.Status}}' behshahr-delivery-postgres-1 2>/dev/null || true)"
+            rd="$(docker inspect --format='{{.State.Health.Status}}' behshahr-delivery-redis-1 2>/dev/null || true)"
+            if [[ "$pg" == healthy && "$rd" == healthy ]]; then exit 0; fi
+            sleep 2
+          done
+          docker compose --env-file ops/production.env -f docker-compose.production.yml ps
+          exit 1
+
+      - name: Run production migrations and applications
+        run: |
+          docker compose --env-file ops/production.env -f docker-compose.production.yml run --rm migrate
+          docker compose --env-file ops/production.env -f docker-compose.production.yml up -d api customer courier admin
+          for attempt in {1..45}; do
+            if docker compose --env-file ops/production.env -f docker-compose.production.yml exec -T api \
+              node -e "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" \
+              && docker compose --env-file ops/production.env -f docker-compose.production.yml exec -T customer \
+              node -e "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" \
+              && docker compose --env-file ops/production.env -f docker-compose.production.yml exec -T courier \
+              node -e "fetch('http://127.0.0.1:3001/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" \
+              && docker compose --env-file ops/production.env -f docker-compose.production.yml exec -T admin \
+              node -e "fetch('http://127.0.0.1:3002/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose --env-file ops/production.env -f docker-compose.production.yml ps
+          docker compose --env-file ops/production.env -f docker-compose.production.yml logs --tail=150 api customer courier admin
+          exit 1
+
+      - name: Verify production user provisioning
+        run: |
+          ENV_FILE=ops/production.env bash ops/provision-user.sh +989111111111 COURIER MOTORBIKE
+          ENV_FILE=ops/production.env bash ops/provision-user.sh +989113333333 ADMIN
+          docker compose --env-file ops/production.env -f docker-compose.production.yml exec -T postgres \
+            psql -U postgres -d behshahr_delivery -v ON_ERROR_STOP=1 -Atc \
+            "SELECT count(*) FROM users WHERE phone IN ('+989111111111','+989113333333') AND status='ACTIVE';" \
+            | grep -qx '2'
+          docker compose --env-file ops/production.env -f docker-compose.production.yml exec -T postgres \
+            psql -U postgres -d behshahr_delivery -v ON_ERROR_STOP=1 -Atc \
+            "SELECT count(*) FROM couriers c JOIN users u ON u.id=c.user_id WHERE u.phone='+989111111111' AND c.vehicle_type='MOTORBIKE';" \
+            | grep -qx '1'
+
+      - name: Run pilot load baseline
+        run: |
+          docker compose --env-file ops/production.env -f docker-compose.production.yml exec -T api \
+            env TOTAL_REQUESTS=1000 CONCURRENCY=50 REQUEST_TIMEOUT_MS=3000 MAX_P95_MS=750 MAX_ERROR_RATE=0.01 \
+            node ops/load/health-load.mjs
+
+      - name: Verify backup and destructive restore drill
+        shell: bash
+        run: |
+          set -euo pipefail
+          COMPOSE='docker compose --env-file ops/production.env -f docker-compose.production.yml'
+          $COMPOSE exec -T postgres psql -U postgres -d behshahr_delivery -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE TABLE restore_probe (id integer PRIMARY KEY, marker text NOT NULL);
+          INSERT INTO restore_probe (id, marker) VALUES (1, 'backup-restore-ok');
+          SQL
+
+          mkdir -p "$RUNNER_TEMP/backups"
+          BACKUP_FILE="$(BACKUP_DIR="$RUNNER_TEMP/backups" ENV_FILE=ops/production.env bash ops/backup-postgres.sh | tail -n1)"
+          test -s "$BACKUP_FILE"
+          sha256sum -c "${BACKUP_FILE}.sha256"
+
+          $COMPOSE exec -T postgres psql -U postgres -d behshahr_delivery -v ON_ERROR_STOP=1 -c 'DROP TABLE restore_probe;'
+
+          CONFIRM_RESTORE=YES \
+          RESTORE_SKIP_MIGRATE=1 \
+          RESTORE_SKIP_APP_START=1 \
+          BACKUP_DIR="$RUNNER_TEMP/backups" \
+          ENV_FILE=ops/production.env \
+            bash ops/restore-postgres.sh "$BACKUP_FILE"
+
+          $COMPOSE exec -T postgres psql -U postgres -d behshahr_delivery -v ON_ERROR_STOP=1 -Atc \
+            "SELECT marker FROM restore_probe WHERE id=1;" | grep -qx 'backup-restore-ok'
+
+      - name: Verify restored release can restart
+        run: |
+          docker compose --env-file ops/production.env -f docker-compose.production.yml run --rm migrate
+          docker compose --env-file ops/production.env -f docker-compose.production.yml up -d api customer courier admin
+          for attempt in {1..30}; do
+            if docker compose --env-file ops/production.env -f docker-compose.production.yml exec -T api \
+              node -e "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Production dependency audit
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm audit --prod --audit-level high
+
+      - name: Show final production container state
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f ops/production.env ]]; then
+            docker compose --env-file ops/production.env -f docker-compose.production.yml ps || true
+          fi
+
+      - name: Show production logs on failure
+        if: failure()
+        shell: bash
+        run: |
+          if [[ -f ops/production.env ]]; then
+            docker compose --env-file ops/production.env -f docker-compose.production.yml logs --tail=200 || true
+          fi
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f ops/production.env ]]; then
+            docker compose --env-file ops/production.env -f docker-compose.production.yml down -v --remove-orphans || true
+          fi

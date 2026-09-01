@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Behshahr Delivery health check every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=15s
+Unit=behshahr-health.service
+
+[Install]
+WantedBy=timers.target
