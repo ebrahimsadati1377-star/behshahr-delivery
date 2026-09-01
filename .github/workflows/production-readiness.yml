@@ -1,0 +1,111 @@
+name: Production Readiness
+
+on:
+  pull_request:
+    paths:
+      - "apps/api/**"
+      - ".github/workflows/production-readiness.yml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+
+jobs:
+  verify-production-readiness:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/behshahr_delivery?schema=public
+      REDIS_URL: redis://localhost:6379
+      API_PORT: 4000
+      NODE_ENV: test
+      SMS_PROVIDER: console
+      DEV_OTP_CODE: "123456"
+      OTP_SECRET: ci-otp-secret-change-me
+      JWT_ACCESS_SECRET: ci-access-secret-change-me
+      JWT_REFRESH_SECRET: ci-refresh-secret-change-me
+      SERVICE_CENTER_LAT: "36.700000"
+      SERVICE_CENTER_LNG: "53.550000"
+      SERVICE_RADIUS_METERS: "20000"
+      ROUTING_PROVIDER: approximate
+      ROUTE_DISTANCE_FACTOR: "1.25"
+      ROUTE_AVG_SPEED_KMH: "25"
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: behshahr_delivery
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d behshahr_delivery"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm --filter @behshahr-delivery/api prisma:migrate:deploy
+      - run: pnpm --filter @behshahr-delivery/api typecheck
+      - run: pnpm --filter @behshahr-delivery/api build
+
+      - name: Verify fail-fast environment validation
+        run: |
+          set +e
+          NODE_ENV=production SMS_PROVIDER=console \
+            pnpm --filter @behshahr-delivery/api start >/tmp/invalid-start.log 2>&1
+          CODE=$?
+          set -e
+          if [ "$CODE" -eq 0 ]; then
+            echo "production app unexpectedly started with console SMS"
+            cat /tmp/invalid-start.log
+            exit 1
+          fi
+          grep -q 'SMS_PROVIDER must be ippanel in production' /tmp/invalid-start.log
+
+      - name: Verify request IDs, JSON logs, and error envelope
+        run: |
+          pnpm --filter @behshahr-delivery/api start >/tmp/api.log 2>&1 &
+          API_PID=$!
+          trap 'kill $API_PID || true' EXIT
+
+          READY=0
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4000/api/health >/dev/null; then READY=1; break; fi
+            sleep 1
+          done
+          if [ "$READY" -ne 1 ]; then cat /tmp/api.log; exit 1; fi
+
+          curl --silent --show-error \
+            -D /tmp/headers.txt \
+            -o /tmp/error.json \
+            -H 'content-type: application/json' \
+            -H 'x-request-id: pilot-test-123' \
+            -X POST http://127.0.0.1:4000/api/auth/request-otp \
+            --data '{"phone":"invalid"}'
+
+          grep -qi '^x-request-id: pilot-test-123' /tmp/headers.txt
+
+          node <<'NODE'
+          const fs = require('fs');
+          const body = JSON.parse(fs.readFileSync('/tmp/error.json','utf8'));
+          if (body.statusCode !== 400) throw new Error(`expected 400 envelope: ${JSON.stringify(body)}`);
+          if (body.code !== 'BAD_REQUEST') throw new Error(`missing error code: ${JSON.stringify(body)}`);
+          if (typeof body.message !== 'string' || !body.message) throw new Error('message missing');
+          if (body.requestId !== 'pilot-test-123') throw new Error(`requestId mismatch: ${JSON.stringify(body)}`);
+          if (body.path !== '/api/auth/request-otp') throw new Error(`path mismatch: ${JSON.stringify(body)}`);
+          if (!body.timestamp) throw new Error('timestamp missing');
+
+          const lines = fs.readFileSync('/tmp/api.log','utf8').trim().split(/\n+/).filter(Boolean);
+          const entries = lines.map((line) => { try { return JSON.parse(line); } catch { return null; } }).filter(Boolean);
+          const req = entries.find((entry) => entry.event === 'http_request' && entry.requestId === 'pilot-test-123');
+          if (!req) throw new Error(`structured request log missing: ${fs.readFileSync('/tmp/api.log','utf8')}`);
+          if (req.path !== '/api/auth/request-otp' || req.statusCode !== 400) throw new Error(`bad request log: ${JSON.stringify(req)}`);
+          NODE
