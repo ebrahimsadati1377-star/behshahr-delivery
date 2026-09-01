@@ -1,0 +1,189 @@
+name: WooCommerce Connector
+
+on:
+  pull_request:
+    paths:
+      - "apps/api/src/integrations/woocommerce/**"
+      - "apps/api/src/orders/**"
+      - "apps/api/src/quotes/**"
+      - "apps/api/prisma/**"
+      - "integrations/wordpress/behshahr-delivery-connector/**"
+      - "docker-compose.dekan.yml"
+      - "ops/dekan.env.example"
+      - ".github/workflows/woocommerce-connector.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/api/src/integrations/woocommerce/**"
+      - "apps/api/src/orders/**"
+      - "apps/api/src/quotes/**"
+      - "apps/api/prisma/**"
+      - "integrations/wordpress/behshahr-delivery-connector/**"
+      - "docker-compose.dekan.yml"
+      - "ops/dekan.env.example"
+      - ".github/workflows/woocommerce-connector.yml"
+
+jobs:
+  verify-woocommerce-connector:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/behshahr_delivery?schema=public
+      REDIS_URL: redis://localhost:6379
+      API_PORT: 4000
+      NODE_ENV: test
+      SMS_PROVIDER: console
+      DEV_OTP_CODE: "123456"
+      OTP_SECRET: ci-otp-secret-change-me
+      JWT_ACCESS_SECRET: ci-access-secret-change-me
+      JWT_REFRESH_SECRET: ci-refresh-secret-change-me
+      WOOCOMMERCE_INTEGRATION_KEY: ci-woocommerce-integration-key
+      SERVICE_CENTER_LAT: "36.700000"
+      SERVICE_CENTER_LNG: "53.550000"
+      SERVICE_RADIUS_METERS: "20000"
+      ROUTING_PROVIDER: approximate
+      ROUTE_DISTANCE_FACTOR: "1.25"
+      ROUTE_AVG_SPEED_KMH: "25"
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: behshahr_delivery
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d behshahr_delivery"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @behshahr-delivery/api prisma:validate
+      - run: pnpm --filter @behshahr-delivery/api prisma:migrate:deploy
+      - name: Seed pricing
+        run: |
+          pnpm --filter @behshahr-delivery/api exec node <<'NODE'
+          const { Client } = require('pg');
+          (async () => {
+            const client = new Client({ connectionString: process.env.DATABASE_URL });
+            await client.connect();
+            await client.query(`
+              INSERT INTO "pricing_rules" (
+                "id", "vehicle_type", "base_fare", "included_distance_meters",
+                "per_km_fare", "minimum_fare", "surge_multiplier", "is_active",
+                "created_at", "updated_at"
+              ) VALUES (
+                '00000000-0000-4000-8000-000000000001', 'MOTORBIKE', 50000, 1000,
+                15000, 50000, 1.00, true, NOW(), NOW()
+              );
+            `);
+            await client.end();
+          })().catch((error) => { console.error(error); process.exit(1); });
+          NODE
+      - run: pnpm --filter @behshahr-delivery/api build
+      - name: PHP syntax check when PHP is available
+        run: |
+          if command -v php >/dev/null 2>&1; then
+            php -l integrations/wordpress/behshahr-delivery-connector/behshahr-delivery-connector.php
+          else
+            echo "php CLI not available on runner; skipping syntax check"
+          fi
+      - name: Verify authentication and idempotent order import
+        run: |
+          pnpm --filter @behshahr-delivery/api start > /tmp/woocommerce-api.log 2>&1 &
+          API_PID=$!
+          trap 'kill $API_PID || true' EXIT
+
+          for attempt in {1..20}; do
+            if curl --fail --silent http://127.0.0.1:4000/api/health >/dev/null; then
+              break
+            fi
+            if [ "$attempt" -eq 20 ]; then
+              cat /tmp/woocommerce-api.log
+              exit 1
+            fi
+            sleep 1
+          done
+
+          node <<'NODE'
+          const url = 'http://127.0.0.1:4000/api/integrations/woocommerce/orders';
+          const payload = {
+            storeId: 'dekan-ci',
+            externalOrderId: '38124',
+            customer: { name: 'CI Customer', phone: '09112223344' },
+            pickup: {
+              title: 'CI Store', formattedAddress: 'Behshahr pickup',
+              latitude: 36.700000, longitude: 53.550000,
+            },
+            dropoff: {
+              title: 'CI Customer', formattedAddress: 'Behshahr dropoff',
+              latitude: 36.710000, longitude: 53.560000,
+              details: 'CI destination',
+            },
+            vehicleType: 'MOTORBIKE',
+            notes: 'WooCommerce connector CI',
+            payment: { paid: true, methodId: 'online', methodTitle: 'Online' },
+            metadata: { orderNumber: '38124' },
+          };
+
+          async function send(key, body = payload) {
+            const response = await fetch(url, {
+              method: 'POST',
+              headers: {
+                'content-type': 'application/json',
+                'x-delivery-key': key,
+              },
+              body: JSON.stringify(body),
+            });
+            const data = await response.json().catch(() => ({}));
+            return { response, data };
+          }
+
+          (async () => {
+            const denied = await send('wrong-key');
+            if (denied.response.status !== 401) {
+              throw new Error(`wrong integration key expected 401, got ${denied.response.status}`);
+            }
+
+            const first = await send('ci-woocommerce-integration-key');
+            if (!first.response.ok || first.data.duplicate !== false) {
+              throw new Error(`first import failed: ${first.response.status} ${JSON.stringify(first.data)}`);
+            }
+            if (first.data.order?.status !== 'REQUESTED') throw new Error('imported order is not REQUESTED');
+            if (first.data.order?.payment?.status !== 'PAID') throw new Error('paid Woo order did not import as PAID');
+
+            const second = await send('ci-woocommerce-integration-key');
+            if (!second.response.ok || second.data.duplicate !== true) {
+              throw new Error(`duplicate import failed: ${second.response.status} ${JSON.stringify(second.data)}`);
+            }
+            if (second.data.order?.id !== first.data.order?.id) {
+              throw new Error('duplicate import created a different Delivery order');
+            }
+
+            const invalidPhonePayload = {
+              ...payload,
+              externalOrderId: '38125',
+              customer: { ...payload.customer, phone: 'invalid' },
+            };
+            const invalidPhone = await send('ci-woocommerce-integration-key', invalidPhonePayload);
+            if (invalidPhone.response.status !== 400) {
+              throw new Error(`invalid phone expected 400, got ${invalidPhone.response.status}`);
+            }
+          })().catch((error) => { console.error(error); process.exit(1); });
+          NODE
