@@ -187,8 +187,9 @@ services:
 
 networks:
   frontend:
+  # The backend network is not published to the host, but remains outbound-capable
+  # so the API can call IPPanel and Neshan over HTTPS.
   backend:
-    internal: true
 
 volumes:
   postgres_data:
