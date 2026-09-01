@@ -113,7 +113,11 @@ export default function NewOrderPage() {
       const response = await fetch('/api/customer/orders', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ quoteId: quote.quoteId, notes: notes.trim() || undefined }),
+        body: JSON.stringify({
+          quoteId: quote.quoteId,
+          paymentMethod: 'CASH',
+          notes: notes.trim() || undefined,
+        }),
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.message ?? 'ثبت سفارش ناموفق بود');
@@ -188,6 +192,7 @@ export default function NewOrderPage() {
                 <span>{routingLabel(quote.routingMode)}</span>
                 <span>فاصله {new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 1 }).format(quote.distanceMeters / 1000)} کیلومتر</span>
                 <span>زمان {Math.max(1, Math.round(quote.estimatedDurationSeconds / 60)).toLocaleString('fa-IR')} دقیقه</span>
+                <span>پرداخت: نقدی هنگام تحویل</span>
               </div>
               <p className="muted">این قیمت حدود {Math.round(quote.expiresInSeconds / 60).toLocaleString('fa-IR')} دقیقه اعتبار دارد.</p>
               <button className="primary" type="button" disabled={submitting} onClick={createOrder}>{submitting ? 'در حال ثبت…' : 'تایید و ثبت درخواست'}</button>
