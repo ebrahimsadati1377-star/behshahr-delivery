@@ -58,7 +58,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @behshahr-delivery/api prisma:migrate:deploy
       - run: pnpm --filter @behshahr-delivery/api typecheck
       - run: pnpm --filter @behshahr-delivery/api build
@@ -154,7 +154,7 @@ jobs:
             echo "API unexpectedly started with console SMS in production"
             exit 1
           fi
-          grep -q "SMS_PROVIDER=console is not allowed in production" /tmp/console-production.log
+          grep -q "SMS_PROVIDER must be ippanel in production" /tmp/console-production.log
       - name: Cleanup
         if: always()
         run: |
