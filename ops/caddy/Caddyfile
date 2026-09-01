@@ -1,0 +1,35 @@
+{
+  email {$ACME_EMAIL}
+  servers {
+    protocols h1 h2 h3
+  }
+}
+
+(common_headers) {
+  header {
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    Permissions-Policy "camera=(), microphone=(), geolocation=(self)"
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+    -Server
+  }
+  encode zstd gzip
+}
+
+{$CUSTOMER_DOMAIN} {
+  import common_headers
+  reverse_proxy customer:3000
+}
+
+{$COURIER_DOMAIN} {
+  import common_headers
+  header X-Robots-Tag "noindex, nofollow"
+  reverse_proxy courier:3001
+}
+
+{$ADMIN_DOMAIN} {
+  import common_headers
+  header X-Robots-Tag "noindex, nofollow"
+  reverse_proxy admin:3002
+}
