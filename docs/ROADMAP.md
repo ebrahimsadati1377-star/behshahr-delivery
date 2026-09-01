@@ -15,14 +15,14 @@ Goal: make the repository safe and predictable for parallel development.
 ## Phase 1 — API Foundation
 
 - [x] NestJS application
-- [ ] configuration validation at startup
+- [x] configuration validation at startup
 - [x] PostgreSQL/PostGIS connection foundation
 - [x] Prisma schema and first migration
 - [x] Redis connection
 - [x] health endpoint with DB + Redis checks
-- [ ] structured logging
+- [x] structured JSON logging with request IDs
 - [x] global request validation
-- [ ] standardized error envelope
+- [x] standardized error envelope
 
 ## Phase 2 — Authentication & Roles
 
@@ -40,7 +40,7 @@ Goal: make the repository safe and predictable for parallel development.
 - [x] quote endpoint
 - [x] configurable service-area validation
 - [x] server-side locked quote with expiry and single-use consumption
-- [ ] production map/routing provider
+- [x] production Neshan routing provider with safe fallback mode
 - [x] order request endpoint from quoteId
 - [x] order history/details with event timeline
 - [x] customer cancellation before courier assignment
