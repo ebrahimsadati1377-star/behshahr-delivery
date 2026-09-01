@@ -6,6 +6,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { AdminService } from './admin.service';
 import { AssignOrderDto } from './dto/assign-order.dto';
+import { CreatePricingRuleDto } from './dto/create-pricing-rule.dto';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -26,6 +27,21 @@ export class AdminController {
   @Get('couriers')
   couriers() {
     return this.admin.couriers();
+  }
+
+  @Get('pricing-rules')
+  pricingRules() {
+    return this.admin.pricingRules();
+  }
+
+  @Post('pricing-rules')
+  createPricingRule(@Body() dto: CreatePricingRuleDto) {
+    return this.admin.createPricingRule(dto);
+  }
+
+  @Post('pricing-rules/:id/deactivate')
+  deactivatePricingRule(@Param('id') id: string) {
+    return this.admin.deactivatePricingRule(id);
   }
 
   @Post('orders/:id/assign')
