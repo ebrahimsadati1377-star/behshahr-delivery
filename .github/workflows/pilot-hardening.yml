@@ -187,12 +187,24 @@ jobs:
 
       - name: Show final production container state
         if: always()
-        run: docker compose --env-file ops/production.env -f docker-compose.production.yml ps || true
+        shell: bash
+        run: |
+          if [[ -f ops/production.env ]]; then
+            docker compose --env-file ops/production.env -f docker-compose.production.yml ps || true
+          fi
 
       - name: Show production logs on failure
         if: failure()
-        run: docker compose --env-file ops/production.env -f docker-compose.production.yml logs --tail=200 || true
+        shell: bash
+        run: |
+          if [[ -f ops/production.env ]]; then
+            docker compose --env-file ops/production.env -f docker-compose.production.yml logs --tail=200 || true
+          fi
 
       - name: Cleanup
         if: always()
-        run: docker compose --env-file ops/production.env -f docker-compose.production.yml down -v --remove-orphans || true
+        shell: bash
+        run: |
+          if [[ -f ops/production.env ]]; then
+            docker compose --env-file ops/production.env -f docker-compose.production.yml down -v --remove-orphans || true
+          fi
