@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
+import { OrderTrackingMap } from './order-tracking-map';
 
 interface OrderEvent {
   id: string;
@@ -12,19 +13,36 @@ interface OrderEvent {
   createdAt: string;
 }
 
+interface AddressSnapshot {
+  title?: string;
+  formattedAddress?: string;
+  details?: string;
+  latitude?: number;
+  longitude?: number;
+}
+
+interface CourierTracking {
+  vehicleType: string;
+  status: string;
+  latitude: number;
+  longitude: number;
+  lastSeenAt: string | null;
+}
+
 interface OrderDetail {
   id: string;
   publicCode: string;
   status: string;
   vehicleType: string;
-  pickupSnapshot: { title?: string; formattedAddress?: string; details?: string };
-  dropoffSnapshot: { title?: string; formattedAddress?: string; details?: string };
+  pickupSnapshot: AddressSnapshot;
+  dropoffSnapshot: AddressSnapshot;
   distanceMeters: number;
   estimatedDurationSeconds: number | null;
   quotedPriceToman: number;
   finalPriceToman: number | null;
   notes: string | null;
   createdAt: string;
+  courierTracking: CourierTracking | null;
   events: OrderEvent[];
 }
 
@@ -128,6 +146,14 @@ export default function OrderDetailPage() {
               </div>
             </div>
 
+            {['REQUESTED', 'ASSIGNED', 'PICKED_UP'].includes(order.status) ? (
+              <OrderTrackingMap
+                pickup={order.pickupSnapshot}
+                dropoff={order.dropoffSnapshot}
+                courier={order.courierTracking}
+              />
+            ) : null}
+
             <div className="stat-grid">
               <div><span>هزینه</span><strong>{toman(order.finalPriceToman ?? order.quotedPriceToman)} تومان</strong></div>
               <div><span>وسیله</span><strong>{order.vehicleType === 'MOTORBIKE' ? 'موتور' : 'خودرو'}</strong></div>
@@ -155,7 +181,7 @@ export default function OrderDetailPage() {
           {order.status === 'REQUESTED' ? (
             <button className="danger-button" type="button" disabled={cancelling} onClick={cancelOrder}>{cancelling ? 'در حال لغو…' : 'لغو درخواست ارسال'}</button>
           ) : null}
-          {['ASSIGNED', 'PICKED_UP'].includes(order.status) ? <p className="muted center-text">وضعیت این صفحه هر ۱۵ ثانیه بروزرسانی می‌شود.</p> : null}
+          {['ASSIGNED', 'PICKED_UP'].includes(order.status) ? <p className="muted center-text">موقعیت پیک و وضعیت این صفحه هر ۱۵ ثانیه بروزرسانی می‌شود.</p> : null}
         </>
       ) : null}
     </main>
