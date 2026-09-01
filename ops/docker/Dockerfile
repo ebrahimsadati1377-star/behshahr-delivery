@@ -1,6 +1,13 @@
 FROM node:22-bookworm-slim AS build
 
-RUN corepack enable && corepack prepare pnpm@10.0.0 --activate
+ENV COREPACK_HOME=/opt/corepack
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates openssl \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p "$COREPACK_HOME" \
+    && corepack enable \
+    && corepack prepare pnpm@10.0.0 --activate \
+    && chmod -R a+rX "$COREPACK_HOME"
 WORKDIR /app
 
 COPY . .
@@ -17,7 +24,14 @@ RUN pnpm --filter "${APP_FILTER}" build
 
 FROM node:22-bookworm-slim AS runtime
 
-RUN corepack enable && corepack prepare pnpm@10.0.0 --activate \
+ENV COREPACK_HOME=/opt/corepack
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates openssl \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p "$COREPACK_HOME" \
+    && corepack enable \
+    && corepack prepare pnpm@10.0.0 --activate \
+    && chmod -R a+rX "$COREPACK_HOME" \
     && groupadd --system app \
     && useradd --system --gid app --create-home app
 WORKDIR /app
