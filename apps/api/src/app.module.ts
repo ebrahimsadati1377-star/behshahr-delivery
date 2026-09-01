@@ -6,6 +6,7 @@ import { CouriersModule } from './couriers/couriers.module';
 import { DatabaseModule } from './database/database.module';
 import { GeoModule } from './geo/geo.module';
 import { HealthController } from './health.controller';
+import { WooCommerceIntegrationModule } from './integrations/woocommerce/woocommerce-integration.module';
 import { OrdersModule } from './orders/orders.module';
 import { QuotesModule } from './quotes/quotes.module';
 import { RealtimeModule } from './realtime/realtime.module';
@@ -23,6 +24,7 @@ import { RedisModule } from './redis/redis.module';
     OrdersModule,
     CouriersModule,
     AdminModule,
+    WooCommerceIntegrationModule,
   ],
   controllers: [HealthController],
 })
