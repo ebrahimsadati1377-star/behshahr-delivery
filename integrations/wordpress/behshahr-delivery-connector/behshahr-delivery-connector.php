@@ -262,6 +262,17 @@ final class BHD_Woo_Delivery_Connector {
     }
 
     private static function dropoff_coordinates(WC_Order $order, array $settings) {
+        $pair_keys = [
+            '_billing_map_lat_long', 'billing_map_lat_long',
+            '_billing_mnsjay_location', 'billing_mnsjay_location',
+            '_shipping_mnsjay_location', 'shipping_mnsjay_location',
+            '_mnsjay_location_coords',
+        ];
+        $pair = self::first_coordinate_pair_meta($order, $pair_keys);
+        if ($pair !== null) {
+            return $pair;
+        }
+
         $lat_keys = array_values(array_unique(array_filter([
             $settings['latitude_meta_key'],
             '_billing_latitude', 'billing_latitude', '_billing_lat', 'billing_lat',
@@ -281,6 +292,24 @@ final class BHD_Woo_Delivery_Connector {
             return new WP_Error('bhd_missing_coordinates', 'مختصات مقصد در سفارش پیدا نشد. کلیدهای Latitude/Longitude را در تنظیمات Connector بررسی کن.');
         }
         return ['latitude' => $lat, 'longitude' => $lng];
+    }
+
+    private static function first_coordinate_pair_meta(WC_Order $order, array $keys): ?array {
+        foreach ($keys as $key) {
+            $raw = trim(self::latin_digits((string)$order->get_meta($key, true)));
+            if ($raw === '') {
+                continue;
+            }
+            if (!preg_match('/^\\s*(-?[0-9]+(?:\\.[0-9]+)?)\\s*[,;|،؛]\\s*(-?[0-9]+(?:\\.[0-9]+)?)\\s*$/u', $raw, $matches)) {
+                continue;
+            }
+            $lat = (float)$matches[1];
+            $lng = (float)$matches[2];
+            if ($lat >= -90 && $lat <= 90 && $lng >= -180 && $lng <= 180) {
+                return ['latitude' => $lat, 'longitude' => $lng];
+            }
+        }
+        return null;
     }
 
     private static function first_numeric_meta(WC_Order $order, array $keys): ?float {
