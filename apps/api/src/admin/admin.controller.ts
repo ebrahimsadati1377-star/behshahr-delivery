@@ -5,12 +5,14 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { OrderRealtimeService } from '../realtime/order-realtime.service';
+import { AdminPaymentService } from './admin-payment.service';
 import { AdminPricingService } from './admin-pricing.service';
 import { AdminServiceZoneService } from './admin-service-zone.service';
 import { AdminService } from './admin.service';
 import { AssignOrderDto } from './dto/assign-order.dto';
 import { CreatePricingRuleDto } from './dto/create-pricing-rule.dto';
 import { CreateServiceZoneDto } from './dto/create-service-zone.dto';
+import { MarkPaymentPaidDto } from './dto/mark-payment-paid.dto';
 
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -18,6 +20,7 @@ import { CreateServiceZoneDto } from './dto/create-service-zone.dto';
 export class AdminController {
   constructor(
     private readonly admin: AdminService,
+    private readonly payments: AdminPaymentService,
     private readonly pricing: AdminPricingService,
     private readonly serviceZones: AdminServiceZoneService,
     private readonly realtime: OrderRealtimeService,
@@ -71,6 +74,15 @@ export class AdminController {
   @Post('service-zones/:id/deactivate')
   deactivateServiceZone(@Param('id') id: string) {
     return this.serviceZones.deactivate(id);
+  }
+
+  @Post('orders/:id/payment/paid')
+  markPaymentPaid(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') orderId: string,
+    @Body() dto: MarkPaymentPaidDto,
+  ) {
+    return this.payments.markPaid(user.id, orderId, dto);
   }
 
   @Post('orders/:id/assign')
