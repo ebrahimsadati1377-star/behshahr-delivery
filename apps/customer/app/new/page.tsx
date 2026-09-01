@@ -3,11 +3,14 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { RouteMap } from '../components/route-map';
 
 interface Address {
   id: string;
   title: string;
   formattedAddress: string;
+  latitude?: number | string;
+  longitude?: number | string;
 }
 
 interface Quote {
@@ -18,10 +21,17 @@ interface Quote {
   priceToman: number;
   currency: string;
   expiresInSeconds: number;
+  routingMode?: 'NESHAN' | 'APPROXIMATE' | 'APPROXIMATE_FALLBACK';
 }
 
 function toman(value: number) {
   return new Intl.NumberFormat('fa-IR').format(value);
+}
+
+function routingLabel(mode?: Quote['routingMode']) {
+  if (mode === 'NESHAN') return 'مسیر واقعی نشان';
+  if (mode === 'APPROXIMATE_FALLBACK') return 'تخمین مسیر (جایگزین موقت)';
+  return 'تخمین مسیر';
 }
 
 export default function NewOrderPage() {
@@ -64,6 +74,15 @@ export default function NewOrderPage() {
   const canQuote = useMemo(
     () => pickupAddressId && dropoffAddressId && pickupAddressId !== dropoffAddressId,
     [pickupAddressId, dropoffAddressId],
+  );
+
+  const pickupAddress = useMemo(
+    () => addresses.find((address) => address.id === pickupAddressId) ?? null,
+    [addresses, pickupAddressId],
+  );
+  const dropoffAddress = useMemo(
+    () => addresses.find((address) => address.id === dropoffAddressId) ?? null,
+    [addresses, dropoffAddressId],
   );
 
   async function getQuote() {
@@ -140,6 +159,8 @@ export default function NewOrderPage() {
               </select>
             </div>
 
+            {pickupAddressId !== dropoffAddressId ? <RouteMap pickup={pickupAddress} dropoff={dropoffAddress} /> : null}
+
             <div className="field">
               <label>وسیله ارسال</label>
               <div className="segmented">
@@ -164,8 +185,9 @@ export default function NewOrderPage() {
                 <strong className="price">{toman(quote.priceToman)} تومان</strong>
               </div>
               <div className="quote-meta">
-                <span>فاصله تقریبی {new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 1 }).format(quote.distanceMeters / 1000)} کیلومتر</span>
-                <span>زمان تقریبی {Math.max(1, Math.round(quote.estimatedDurationSeconds / 60)).toLocaleString('fa-IR')} دقیقه</span>
+                <span>{routingLabel(quote.routingMode)}</span>
+                <span>فاصله {new Intl.NumberFormat('fa-IR', { maximumFractionDigits: 1 }).format(quote.distanceMeters / 1000)} کیلومتر</span>
+                <span>زمان {Math.max(1, Math.round(quote.estimatedDurationSeconds / 60)).toLocaleString('fa-IR')} دقیقه</span>
               </div>
               <p className="muted">این قیمت حدود {Math.round(quote.expiresInSeconds / 60).toLocaleString('fa-IR')} دقیقه اعتبار دارد.</p>
               <button className="primary" type="button" disabled={submitting} onClick={createOrder}>{submitting ? 'در حال ثبت…' : 'تایید و ثبت درخواست'}</button>
