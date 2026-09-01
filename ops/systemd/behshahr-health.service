@@ -1,0 +1,11 @@
+[Unit]
+Description=Behshahr Delivery production health check
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/behshahr-delivery
+Environment=ENV_FILE=ops/production.env
+ExecStart=/usr/bin/bash ops/healthcheck.sh
+User=root
