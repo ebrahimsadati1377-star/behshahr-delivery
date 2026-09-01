@@ -7,6 +7,11 @@ COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.dekan.yml}"
 export ENV_FILE COMPOSE_FILE
 bash ops/dekan-preflight.sh
 
+set -a
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+set +a
+
 compose=(docker compose --env-file "$ENV_FILE" -f "$COMPOSE_FILE")
 
 echo "[dekan-deploy] building API, Courier and Admin images"
