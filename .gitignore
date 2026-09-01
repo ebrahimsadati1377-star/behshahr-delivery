@@ -16,6 +16,7 @@ apps/api/src/generated/prisma/
 .env
 .env.*
 !.env.example
+ops/production.env
 
 # logs
 *.log
@@ -31,3 +32,4 @@ Thumbs.db
 # runtime data
 uploads/
 .tmp/
+backups/
