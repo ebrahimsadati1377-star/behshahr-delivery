@@ -1,0 +1,112 @@
+name: Dekan Deployment
+
+on:
+  pull_request:
+    paths:
+      - "docker-compose.dekan.yml"
+      - "ops/dekan.env.example"
+      - "ops/dekan-preflight.sh"
+      - "ops/dekan-deploy.sh"
+      - "ops/docker/Dockerfile"
+      - "pnpm-lock.yaml"
+      - "package.json"
+      - "apps/api/**"
+      - "apps/courier/**"
+      - "apps/admin/**"
+      - ".github/workflows/dekan-deployment.yml"
+
+jobs:
+  verify-dekan-profile:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate shell syntax
+        run: |
+          bash -n ops/dekan-preflight.sh ops/dekan-deploy.sh
+          shellcheck -x -e SC1091 ops/dekan-preflight.sh ops/dekan-deploy.sh
+
+      - name: Create CI Dekan environment
+        run: |
+          cat > ops/dekan.env <<'ENV'
+          DEKAN_API_PORT=4000
+          DEKAN_COURIER_PORT=3001
+          DEKAN_ADMIN_PORT=3002
+          POSTGRES_PASSWORD=ci-postgres-secret-0123456789abcdef0123456789abcdef
+          OTP_SECRET=ci-otp-secret-0123456789abcdef0123456789abcdef
+          JWT_ACCESS_SECRET=ci-access-secret-0123456789abcdef0123456789abcdef
+          JWT_REFRESH_SECRET=ci-refresh-secret-0123456789abcdef0123456789abcdef
+          IPPANEL_API_KEY=ci-fake-ippanel-key
+          IPPANEL_FROM_NUMBER=+982100000000
+          IPPANEL_OTP_PATTERN_CODE=ci-pattern-code
+          IPPANEL_OTP_PARAM_NAME=code
+          IPPANEL_API_BASE_URL=https://edge.ippanel.com
+          IPPANEL_TIMEOUT_MS=1000
+          ROUTING_PROVIDER=approximate
+          NESHAN_SERVICE_API_KEY=
+          NESHAN_API_BASE_URL=https://api.neshan.org
+          NESHAN_ROUTING_TIMEOUT_MS=1000
+          NEXT_PUBLIC_NESHAN_MAP_KEY=ci-fake-web-map-key
+          SERVICE_CENTER_LAT=36.6980
+          SERVICE_CENTER_LNG=53.5520
+          SERVICE_RADIUS_METERS=15000
+          ROUTE_DISTANCE_FACTOR=1.25
+          ROUTE_AVG_SPEED_KMH=25
+          ENV
+          chmod 600 ops/dekan.env
+
+      - name: Validate isolated Compose profile
+        run: |
+          ENV_FILE=ops/dekan.env bash ops/dekan-preflight.sh
+          rendered="$(docker compose --env-file ops/dekan.env -f docker-compose.dekan.yml config)"
+          grep -q 'host_ip: 127.0.0.1' <<<"$rendered"
+          ! grep -q 'published: "80"' <<<"$rendered"
+          ! grep -q 'published: "443"' <<<"$rendered"
+          ! grep -q 'customer:' <<<"$rendered"
+          ! grep -q 'caddy:' <<<"$rendered"
+
+      - name: Build Dekan production images
+        run: |
+          docker compose --env-file ops/dekan.env -f docker-compose.dekan.yml build api courier admin migrate
+
+      - name: Start Dekan profile
+        run: |
+          docker compose --env-file ops/dekan.env -f docker-compose.dekan.yml up -d postgres redis
+          docker compose --env-file ops/dekan.env -f docker-compose.dekan.yml run --rm migrate
+          docker compose --env-file ops/dekan.env -f docker-compose.dekan.yml up -d api courier admin
+          for attempt in {1..45}; do
+            if curl --fail --silent http://127.0.0.1:4000/api/health >/dev/null \
+              && curl --fail --silent http://127.0.0.1:3001/ >/dev/null \
+              && curl --fail --silent http://127.0.0.1:3002/ >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose --env-file ops/dekan.env -f docker-compose.dekan.yml ps
+          exit 1
+
+      - name: Verify host isolation and resource limits
+        run: |
+          for port in 3001 3002 4000; do
+            ss -lnt | grep -E "127\\.0\\.0\\.1:${port}\\b"
+            ! ss -lnt | grep -E "(0\\.0\\.0\\.0|\\[::\\]):${port}\\b"
+          done
+          test "$(docker inspect -f '{{.HostConfig.Memory}}' dekan-delivery-postgres-1)" -eq 805306368
+          test "$(docker inspect -f '{{.HostConfig.Memory}}' dekan-delivery-redis-1)" -eq 134217728
+          test "$(docker inspect -f '{{.HostConfig.Memory}}' dekan-delivery-api-1)" -eq 536870912
+          test "$(docker inspect -f '{{.HostConfig.Memory}}' dekan-delivery-courier-1)" -eq 268435456
+          test "$(docker inspect -f '{{.HostConfig.Memory}}' dekan-delivery-admin-1)" -eq 268435456
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose --env-file ops/dekan.env -f docker-compose.dekan.yml logs --tail=200 || true
+
+      - name: Cleanup
+        if: always()
+        run: docker compose --env-file ops/dekan.env -f docker-compose.dekan.yml down -v --remove-orphans || true

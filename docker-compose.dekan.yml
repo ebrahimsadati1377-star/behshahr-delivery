@@ -1,0 +1,169 @@
+name: dekan-delivery
+
+x-app-build: &app-build
+  context: .
+  dockerfile: ops/docker/Dockerfile
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    mem_limit: 768m
+    cpus: 0.60
+    environment:
+      POSTGRES_DB: behshahr_delivery
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - dekan_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d behshahr_delivery"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [backend]
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    mem_limit: 128m
+    cpus: 0.20
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1000", "--maxmemory", "96mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - dekan_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [backend]
+
+  migrate:
+    build:
+      <<: *app-build
+      args:
+        APP_FILTER: "@behshahr-delivery/api"
+        APP_PORT: "4000"
+    mem_limit: 512m
+    cpus: 0.50
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/behshahr_delivery?schema=public
+    command: ["sh", "-c", "pnpm --filter @behshahr-delivery/api prisma:migrate:deploy"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks: [backend]
+
+  api:
+    build:
+      <<: *app-build
+      args:
+        APP_FILTER: "@behshahr-delivery/api"
+        APP_PORT: "4000"
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.70
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      NODE_ENV: production
+      API_PORT: "4000"
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/behshahr_delivery?schema=public
+      REDIS_URL: redis://redis:6379
+      OTP_SECRET: ${OTP_SECRET:?OTP_SECRET is required}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required}
+      SMS_PROVIDER: ippanel
+      IPPANEL_API_KEY: ${IPPANEL_API_KEY:?IPPANEL_API_KEY is required}
+      IPPANEL_FROM_NUMBER: ${IPPANEL_FROM_NUMBER:?IPPANEL_FROM_NUMBER is required}
+      IPPANEL_OTP_PATTERN_CODE: ${IPPANEL_OTP_PATTERN_CODE:?IPPANEL_OTP_PATTERN_CODE is required}
+      IPPANEL_OTP_PARAM_NAME: ${IPPANEL_OTP_PARAM_NAME:-code}
+      IPPANEL_API_BASE_URL: ${IPPANEL_API_BASE_URL:-https://edge.ippanel.com}
+      IPPANEL_TIMEOUT_MS: ${IPPANEL_TIMEOUT_MS:-5000}
+      ROUTING_PROVIDER: ${ROUTING_PROVIDER:-auto}
+      NESHAN_SERVICE_API_KEY: ${NESHAN_SERVICE_API_KEY:-}
+      NESHAN_API_BASE_URL: ${NESHAN_API_BASE_URL:-https://api.neshan.org}
+      NESHAN_ROUTING_TIMEOUT_MS: ${NESHAN_ROUTING_TIMEOUT_MS:-5000}
+      SERVICE_CENTER_LAT: ${SERVICE_CENTER_LAT:-36.6980}
+      SERVICE_CENTER_LNG: ${SERVICE_CENTER_LNG:-53.5520}
+      SERVICE_RADIUS_METERS: ${SERVICE_RADIUS_METERS:-15000}
+      ROUTE_DISTANCE_FACTOR: ${ROUTE_DISTANCE_FACTOR:-1.25}
+      ROUTE_AVG_SPEED_KMH: ${ROUTE_AVG_SPEED_KMH:-25}
+    ports:
+      - "127.0.0.1:${DEKAN_API_PORT:-4000}:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:4000/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks: [backend]
+
+  courier:
+    build:
+      <<: *app-build
+      args:
+        APP_FILTER: "@behshahr-delivery/courier"
+        APP_PORT: "3001"
+        NEXT_PUBLIC_NESHAN_MAP_KEY: ${NEXT_PUBLIC_NESHAN_MAP_KEY:-}
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.25
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      NODE_ENV: production
+      API_INTERNAL_URL: http://api:4000/api
+    ports:
+      - "127.0.0.1:${DEKAN_COURIER_PORT:-3001}:3001"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3001/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\""]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+    networks: [backend]
+
+  admin:
+    build:
+      <<: *app-build
+      args:
+        APP_FILTER: "@behshahr-delivery/admin"
+        APP_PORT: "3002"
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.25
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      NODE_ENV: production
+      API_INTERNAL_URL: http://api:4000/api
+    ports:
+      - "127.0.0.1:${DEKAN_ADMIN_PORT:-3002}:3002"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:3002/').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\""]
+      interval: 20s
+      timeout: 5s
+      retries: 6
+    networks: [backend]
+
+networks:
+  backend:
+    driver: bridge
+
+volumes:
+  dekan_postgres_data:
+  dekan_redis_data:
