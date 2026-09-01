@@ -1,0 +1,138 @@
+name: Pilot Payment
+
+on:
+  pull_request:
+    paths:
+      - "apps/api/**"
+      - "apps/customer/**"
+      - "apps/admin/**"
+      - ".github/workflows/pilot-payment.yml"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+
+jobs:
+  verify-pilot-payment:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/behshahr_delivery?schema=public
+      REDIS_URL: redis://localhost:6379
+      API_PORT: 4000
+      NODE_ENV: test
+      SMS_PROVIDER: console
+      DEV_OTP_CODE: "123456"
+      OTP_SECRET: ci-otp-secret-change-me
+      JWT_ACCESS_SECRET: ci-access-secret-change-me
+      JWT_REFRESH_SECRET: ci-refresh-secret-change-me
+      SERVICE_CENTER_LAT: "36.700000"
+      SERVICE_CENTER_LNG: "53.550000"
+      SERVICE_RADIUS_METERS: "20000"
+      ROUTING_PROVIDER: approximate
+      ROUTE_DISTANCE_FACTOR: "1.25"
+      ROUTE_AVG_SPEED_KMH: "25"
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: behshahr_delivery
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d behshahr_delivery"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm --filter @behshahr-delivery/api prisma:migrate:deploy
+      - name: Seed pricing and admin
+        run: |
+          pnpm --filter @behshahr-delivery/api exec node <<'NODE'
+          const { Client } = require('pg');
+          (async () => {
+            const db = new Client({ connectionString: process.env.DATABASE_URL });
+            await db.connect();
+            await db.query(`
+              INSERT INTO "pricing_rules" ("id","vehicle_type","base_fare","included_distance_meters","per_km_fare","minimum_fare","surge_multiplier","is_active","created_at","updated_at")
+              VALUES ('00000000-0000-4000-8000-000000000901','MOTORBIKE',50000,1000,15000,50000,1.00,true,NOW(),NOW());
+              INSERT INTO "users" ("id","phone","role","status","created_at","updated_at")
+              VALUES ('00000000-0000-4000-8000-000000000910','+989113333333','ADMIN','ACTIVE',NOW(),NOW());
+            `);
+            await db.end();
+          })().catch((e) => { console.error(e); process.exit(1); });
+          NODE
+      - run: pnpm --filter @behshahr-delivery/api typecheck
+      - run: pnpm --filter @behshahr-delivery/customer typecheck
+      - run: pnpm --filter @behshahr-delivery/admin typecheck
+      - run: pnpm --filter @behshahr-delivery/api build
+      - run: pnpm --filter @behshahr-delivery/customer build
+      - run: pnpm --filter @behshahr-delivery/admin build
+      - name: Smoke test cash payment lifecycle
+        run: |
+          pnpm --filter @behshahr-delivery/api start >/tmp/payment-api.log 2>&1 &
+          API_PID=$!
+          trap 'kill $API_PID || true' EXIT
+          READY=0
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4000/api/health >/dev/null; then READY=1; break; fi
+            sleep 1
+          done
+          if [ "$READY" -ne 1 ]; then cat /tmp/payment-api.log; exit 1; fi
+
+          node <<'NODE'
+          const api = 'http://127.0.0.1:4000/api';
+          async function json(path, options = {}, expected) {
+            const response = await fetch(`${api}${path}`, options);
+            const body = await response.json().catch(() => ({}));
+            if (expected !== undefined && response.status !== expected) throw new Error(`${path} expected ${expected}, got ${response.status}: ${JSON.stringify(body)}`);
+            if (expected === undefined && !response.ok) throw new Error(`${path} failed ${response.status}: ${JSON.stringify(body)}`);
+            return body;
+          }
+          async function login(phone) {
+            await json('/auth/request-otp', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({phone}) });
+            return json('/auth/verify-otp', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({phone,code:'123456'}) });
+          }
+          async function makeQuote(headers, suffix) {
+            const pickup = await json('/addresses', { method:'POST', headers, body:JSON.stringify({title:`Pickup ${suffix}`,formattedAddress:'Behshahr pickup',latitude:36.7000,longitude:53.5500}) });
+            const dropoff = await json('/addresses', { method:'POST', headers, body:JSON.stringify({title:`Dropoff ${suffix}`,formattedAddress:'Behshahr dropoff',latitude:36.7050,longitude:53.5550}) });
+            return json('/quotes', { method:'POST', headers, body:JSON.stringify({pickupAddressId:pickup.id,dropoffAddressId:dropoff.id,vehicleType:'MOTORBIKE'}) });
+          }
+
+          const customer = await login('+989112229001');
+          const customerHeaders = { authorization:`Bearer ${customer.accessToken}`, 'content-type':'application/json' };
+          const quote = await makeQuote(customerHeaders, 'one');
+
+          await json('/orders', { method:'POST', headers:customerHeaders, body:JSON.stringify({quoteId:quote.quoteId,paymentMethod:'ONLINE'}) }, 503);
+          const order = await json('/orders', { method:'POST', headers:customerHeaders, body:JSON.stringify({quoteId:quote.quoteId,paymentMethod:'CASH'}) });
+          if (order.payment?.method !== 'CASH' || order.payment?.status !== 'PENDING') throw new Error(`cash payment missing: ${JSON.stringify(order)}`);
+          if (order.payment.amountToman !== quote.priceToman) throw new Error('payment amount does not match quote');
+
+          const detailBefore = await json(`/orders/${order.id}`, { headers:customerHeaders });
+          if (!detailBefore.payment?.events?.some(e => e.eventType === 'PAYMENT_CREATED')) throw new Error('payment creation audit event missing');
+
+          const admin = await login('+989113333333');
+          const adminHeaders = { authorization:`Bearer ${admin.accessToken}`, 'content-type':'application/json' };
+          const paid = await json(`/admin/orders/${order.id}/payment/paid`, { method:'POST', headers:adminHeaders, body:JSON.stringify({reference:'cash-receipt-1'}) });
+          if (paid.status !== 'PAID' || paid.providerReference !== 'cash-receipt-1' || !paid.paidAt) throw new Error(`mark paid failed: ${JSON.stringify(paid)}`);
+
+          const detailAfter = await json(`/orders/${order.id}`, { headers:customerHeaders });
+          if (detailAfter.payment?.status !== 'PAID') throw new Error('customer detail did not receive paid status');
+          if (!detailAfter.events?.some(e => e.eventType === 'ORDER_PAYMENT_MARKED_PAID')) throw new Error('order payment audit event missing');
+
+          const quote2 = await makeQuote(customerHeaders, 'two');
+          const order2 = await json('/orders', { method:'POST', headers:customerHeaders, body:JSON.stringify({quoteId:quote2.quoteId,paymentMethod:'CASH'}) });
+          const cancelled = await json(`/orders/${order2.id}/cancel`, { method:'POST', headers:customerHeaders });
+          if (cancelled.status !== 'CANCELLED' || cancelled.payment?.status !== 'CANCELLED') throw new Error(`cancel did not cancel payment: ${JSON.stringify(cancelled)}`);
+          const cancelledDetail = await json(`/orders/${order2.id}`, { headers:customerHeaders });
+          if (!cancelledDetail.payment?.events?.some(e => e.eventType === 'PAYMENT_CANCELLED_WITH_ORDER')) throw new Error('payment cancellation audit missing');
+          NODE
