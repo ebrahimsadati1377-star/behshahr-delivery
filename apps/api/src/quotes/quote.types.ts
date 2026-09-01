@@ -11,8 +11,8 @@ export interface AddressSnapshot {
 export interface LockedQuote {
   quoteId: string;
   userId: string;
-  pickupAddressId: string;
-  dropoffAddressId: string;
+  pickupAddressId?: string;
+  dropoffAddressId?: string;
   pickupSnapshot: AddressSnapshot;
   dropoffSnapshot: AddressSnapshot;
   vehicleType: 'MOTORBIKE' | 'CAR';
