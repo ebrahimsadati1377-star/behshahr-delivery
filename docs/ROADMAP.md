@@ -40,7 +40,8 @@ Goal: make the repository safe and predictable for parallel development.
 - [x] quote endpoint
 - [x] configurable service-area validation
 - [x] server-side locked quote with expiry and single-use consumption
-- [ ] production map/routing provider
+- [x] Neshan routing provider adapter with approximate fallback
+- [x] customer pickup/dropoff map UI with Web Map key fallback
 - [x] order request endpoint from quoteId
 - [x] order history/details with event timeline
 - [x] customer cancellation before courier assignment
@@ -51,7 +52,7 @@ Goal: make the repository safe and predictable for parallel development.
 - [x] quote + order creation screens
 - [x] order history/detail/cancel screens
 - [x] authenticated customer BFF proxy with transparent session refresh
-- [x] temporary 15-second order status polling until realtime is added
+- [x] temporary order/status tracking polling until WebSocket realtime is added
 
 ## Phase 4 — Courier Flow
 
@@ -62,7 +63,8 @@ Goal: make the repository safe and predictable for parallel development.
 - [x] pickup and delivery state transitions
 - [x] location heartbeat with PostGIS point
 - [x] courier/order audit events
-- [ ] courier PWA
+- [x] courier PWA
+- [x] mission map with pickup/dropoff and courier GPS marker
 
 ## Phase 5 — Admin Operations
 
@@ -70,15 +72,15 @@ Goal: make the repository safe and predictable for parallel development.
 - [x] courier availability/location API
 - [x] manual assignment and reassignment
 - [x] order event timeline
-- [ ] admin web dashboard
-- [ ] pricing-rule management
+- [x] admin web dashboard
+- [x] pricing-rule management
 - [ ] service-zone management
 
 ## Phase 6 — Realtime & Notifications
 
 - [ ] WebSocket order updates
-- [ ] realtime customer tracking screen
-- [ ] courier location updates
+- [x] customer tracking screen with map and courier position
+- [x] courier location heartbeat updates
 - [ ] SMS/push adapter and critical notifications
 
 ## Phase 7 — Payment
