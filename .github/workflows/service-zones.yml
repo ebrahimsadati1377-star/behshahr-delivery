@@ -1,0 +1,154 @@
+name: Service Zones
+
+on:
+  pull_request:
+    paths:
+      - "apps/admin/**"
+      - "apps/api/prisma/**"
+      - "apps/api/src/admin/**"
+      - "apps/api/src/geo/**"
+      - "apps/api/src/quotes/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/service-zones.yml"
+
+jobs:
+  verify-service-zones:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/behshahr_delivery?schema=public
+      REDIS_URL: redis://localhost:6379
+      API_PORT: 4000
+      API_INTERNAL_URL: http://127.0.0.1:4000/api
+      NODE_ENV: test
+      SMS_PROVIDER: console
+      DEV_OTP_CODE: "123456"
+      OTP_SECRET: ci-otp-secret-change-me
+      JWT_ACCESS_SECRET: ci-access-secret-change-me
+      JWT_REFRESH_SECRET: ci-refresh-secret-change-me
+      SERVICE_CENTER_LAT: "36.700000"
+      SERVICE_CENTER_LNG: "53.550000"
+      SERVICE_RADIUS_METERS: "20000"
+      ROUTE_DISTANCE_FACTOR: "1.25"
+      ROUTE_AVG_SPEED_KMH: "25"
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: behshahr_delivery
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d behshahr_delivery"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm --filter @behshahr-delivery/api prisma:migrate:deploy
+      - name: Seed service-zone test data
+        run: |
+          pnpm --filter @behshahr-delivery/api exec node <<'NODE'
+          const { Client } = require('pg');
+          (async () => {
+            const db = new Client({ connectionString: process.env.DATABASE_URL });
+            await db.connect();
+            await db.query(`
+              INSERT INTO "pricing_rules" ("id","vehicle_type","base_fare","included_distance_meters","per_km_fare","minimum_fare","surge_multiplier","is_active","created_at","updated_at")
+              VALUES ('00000000-0000-4000-8000-000000000801','MOTORBIKE',50000,1000,15000,50000,1.00,true,NOW(),NOW());
+              INSERT INTO "users" ("id","phone","role","status","created_at","updated_at")
+              VALUES ('00000000-0000-4000-8000-000000000810','+989113333333','ADMIN','ACTIVE',NOW(),NOW());
+            `);
+            await db.end();
+          })().catch((e) => { console.error(e); process.exit(1); });
+          NODE
+      - run: pnpm --filter @behshahr-delivery/api build
+      - run: pnpm --filter @behshahr-delivery/admin typecheck
+      - run: pnpm --filter @behshahr-delivery/admin build
+      - name: Smoke test service-zone enforcement
+        run: |
+          pnpm --filter @behshahr-delivery/api start > /tmp/zones-api.log 2>&1 &
+          API_PID=$!
+          pnpm --filter @behshahr-delivery/admin start > /tmp/zones-web.log 2>&1 &
+          WEB_PID=$!
+          trap 'kill $API_PID $WEB_PID || true' EXIT
+
+          API_READY=0
+          WEB_READY=0
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4000/api/health >/dev/null; then API_READY=1; fi
+            if curl --fail --silent http://127.0.0.1:3002/zones >/dev/null; then WEB_READY=1; fi
+            if [ "$API_READY" -eq 1 ] && [ "$WEB_READY" -eq 1 ]; then break; fi
+            sleep 1
+          done
+          if [ "$API_READY" -ne 1 ] || [ "$WEB_READY" -ne 1 ]; then
+            cat /tmp/zones-api.log
+            cat /tmp/zones-web.log
+            exit 1
+          fi
+
+          node <<'NODE'
+          const api = 'http://127.0.0.1:4000/api';
+          const web = 'http://127.0.0.1:3002';
+
+          async function json(url, options = {}, expected) {
+            const response = await fetch(url, options);
+            const body = await response.json().catch(() => ({}));
+            if (expected !== undefined && response.status !== expected) throw new Error(`${url} expected ${expected}, got ${response.status}: ${JSON.stringify(body)}`);
+            if (expected === undefined && !response.ok) throw new Error(`${url} failed ${response.status}: ${JSON.stringify(body)}`);
+            return { response, body };
+          }
+
+          async function apiLogin(phone) {
+            await json(`${api}/auth/request-otp`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({phone}) });
+            return (await json(`${api}/auth/verify-otp`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({phone,code:'123456'}) })).body;
+          }
+
+          const adminPhone = '+989113333333';
+          await json(`${web}/api/session/request-otp`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({phone:adminPhone}) });
+          const verified = await json(`${web}/api/session/verify-otp`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({phone:adminPhone,code:'123456'}) });
+          const cookies = typeof verified.response.headers.getSetCookie === 'function' ? verified.response.headers.getSetCookie() : [];
+          const cookie = cookies.map(v => v.split(';')[0]).join('; ');
+          if (!cookie) throw new Error('admin session cookies missing');
+          const adminHeaders = { cookie, 'content-type':'application/json' };
+
+          const empty = (await json(`${web}/api/admin/service-zones`, { headers:adminHeaders })).body;
+          if (!Array.isArray(empty) || empty.length !== 0) throw new Error(`expected empty service zones: ${JSON.stringify(empty)}`);
+
+          const created = (await json(`${web}/api/admin/service-zones`, {
+            method:'POST', headers:adminHeaders,
+            body:JSON.stringify({name:'Behshahr pilot',centerLatitude:36.7,centerLongitude:53.55,radiusMeters:2500})
+          })).body;
+          if (!created.id || !created.isActive || created.radiusMeters !== 2500) throw new Error(`service zone creation failed: ${JSON.stringify(created)}`);
+
+          const customer = await apiLogin('+989112228888');
+          const customerHeaders = { authorization:`Bearer ${customer.accessToken}`, 'content-type':'application/json' };
+          const pickup = (await json(`${api}/addresses`, { method:'POST', headers:customerHeaders, body:JSON.stringify({title:'Inside pickup',formattedAddress:'Inside pickup',latitude:36.7005,longitude:53.5505}) })).body;
+          const dropoff = (await json(`${api}/addresses`, { method:'POST', headers:customerHeaders, body:JSON.stringify({title:'Inside dropoff',formattedAddress:'Inside dropoff',latitude:36.705,longitude:53.555}) })).body;
+          const outside = (await json(`${api}/addresses`, { method:'POST', headers:customerHeaders, body:JSON.stringify({title:'Outside',formattedAddress:'Outside zone',latitude:36.78,longitude:53.66}) })).body;
+
+          const validQuote = (await json(`${api}/quotes`, { method:'POST', headers:customerHeaders, body:JSON.stringify({pickupAddressId:pickup.id,dropoffAddressId:dropoff.id,vehicleType:'MOTORBIKE'}) })).body;
+          if (!validQuote.quoteId) throw new Error('inside-zone quote was not created');
+
+          await json(`${api}/quotes`, { method:'POST', headers:customerHeaders, body:JSON.stringify({pickupAddressId:pickup.id,dropoffAddressId:outside.id,vehicleType:'MOTORBIKE'}) }, 400);
+
+          const deactivated = (await json(`${web}/api/admin/service-zones/${created.id}/deactivate`, { method:'POST', headers:adminHeaders })).body;
+          if (deactivated.isActive) throw new Error('zone deactivation failed');
+          await json(`${api}/quotes`, { method:'POST', headers:customerHeaders, body:JSON.stringify({pickupAddressId:pickup.id,dropoffAddressId:dropoff.id,vehicleType:'MOTORBIKE'}) }, 400);
+
+          const activated = (await json(`${web}/api/admin/service-zones/${created.id}/activate`, { method:'POST', headers:adminHeaders })).body;
+          if (!activated.isActive) throw new Error('zone activation failed');
+          const restoredQuote = (await json(`${api}/quotes`, { method:'POST', headers:customerHeaders, body:JSON.stringify({pickupAddressId:pickup.id,dropoffAddressId:dropoff.id,vehicleType:'MOTORBIKE'}) })).body;
+          if (!restoredQuote.quoteId) throw new Error('quote did not recover after activation');
+          NODE

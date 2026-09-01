@@ -51,7 +51,7 @@ Goal: make the repository safe and predictable for parallel development.
 - [x] quote + order creation screens
 - [x] order history/detail/cancel screens
 - [x] authenticated customer BFF proxy with transparent session refresh
-- [x] temporary 15-second order status polling until realtime is added
+- [x] fallback order status polling for degraded realtime conditions
 
 ## Phase 4 — Courier Flow
 
@@ -62,7 +62,7 @@ Goal: make the repository safe and predictable for parallel development.
 - [x] pickup and delivery state transitions
 - [x] location heartbeat with PostGIS point
 - [x] courier/order audit events
-- [ ] courier PWA
+- [x] courier PWA
 
 ## Phase 5 — Admin Operations
 
@@ -70,15 +70,15 @@ Goal: make the repository safe and predictable for parallel development.
 - [x] courier availability/location API
 - [x] manual assignment and reassignment
 - [x] order event timeline
-- [ ] admin web dashboard
-- [ ] pricing-rule management
-- [ ] service-zone management
+- [x] admin web dashboard
+- [x] pricing-rule management
+- [x] service-zone management with PostGIS enforcement
 
 ## Phase 6 — Realtime & Notifications
 
-- [ ] WebSocket order updates
-- [ ] realtime customer tracking screen
-- [ ] courier location updates
+- [x] realtime order updates via SSE
+- [x] realtime customer tracking screen
+- [x] courier location heartbeat exposed to tracking
 - [ ] SMS/push adapter and critical notifications
 
 ## Phase 7 — Payment
