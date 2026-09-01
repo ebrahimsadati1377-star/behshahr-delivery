@@ -2,14 +2,26 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { concat, defer, from, interval, map, merge, of, switchMap } from 'rxjs';
 import { PrismaService } from '../database/prisma.service';
-import { LockedQuote } from '../quotes/quote.types';
 import { QuotesService } from '../quotes/quotes.service';
 import { OrderRealtimeService } from '../realtime/order-realtime.service';
 import { CreateOrderDto } from './dto/create-order.dto';
+
+type SerializedPaymentSource = {
+  id: string;
+  method: string;
+  status: string;
+  amount: bigint;
+  provider: string | null;
+  providerReference: string | null;
+  paidAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
 
 @Injectable()
 export class OrdersService {
@@ -20,6 +32,13 @@ export class OrdersService {
   ) {}
 
   async create(userId: string, dto: CreateOrderDto) {
+    const paymentMethod = dto.paymentMethod ?? 'CASH';
+    if (paymentMethod === 'ONLINE') {
+      throw new ServiceUnavailableException(
+        'Online payment is not enabled for the pilot yet',
+      );
+    }
+
     const quote = await this.quotes.consumeLockedQuote(userId, dto.quoteId);
 
     try {
@@ -36,6 +55,23 @@ export class OrdersService {
           quotedPrice: BigInt(quote.priceToman),
           status: 'REQUESTED',
           notes: dto.notes,
+          payment: {
+            create: {
+              method: paymentMethod,
+              status: 'PENDING',
+              amount: BigInt(quote.priceToman),
+              provider: 'cash',
+              events: {
+                create: {
+                  actorType: 'CUSTOMER',
+                  actorId: userId,
+                  eventType: 'PAYMENT_CREATED',
+                  toStatus: 'PENDING',
+                  metadata: { method: paymentMethod },
+                },
+              },
+            },
+          },
           events: {
             create: {
               actorType: 'CUSTOMER',
@@ -47,10 +83,12 @@ export class OrdersService {
                 pricingRuleId: quote.pricingRuleId,
                 vehicleType: quote.vehicleType,
                 routingMode: quote.routingMode,
+                paymentMethod,
               },
             },
           },
         },
+        include: { payment: true },
       });
 
       return this.serializeOrder(order);
@@ -63,6 +101,7 @@ export class OrdersService {
   async list(userId: string) {
     const orders = await this.prisma.order.findMany({
       where: { customerId: userId },
+      include: { payment: true },
       orderBy: { createdAt: 'desc' },
       take: 50,
     });
@@ -76,6 +115,11 @@ export class OrdersService {
       include: {
         events: {
           orderBy: { createdAt: 'asc' },
+        },
+        payment: {
+          include: {
+            events: { orderBy: { createdAt: 'asc' } },
+          },
         },
         courier: {
           select: {
@@ -121,6 +165,21 @@ export class OrdersService {
         metadata: event.metadata,
         createdAt: event.createdAt,
       })),
+      payment: order.payment
+        ? {
+            ...this.serializePayment(order.payment),
+            events: order.payment.events.map((event) => ({
+              id: event.id.toString(),
+              actorType: event.actorType,
+              actorId: event.actorId,
+              eventType: event.eventType,
+              fromStatus: event.fromStatus,
+              toStatus: event.toStatus,
+              metadata: event.metadata,
+              createdAt: event.createdAt,
+            })),
+          }
+        : null,
     };
   }
 
@@ -191,7 +250,28 @@ export class OrdersService {
         },
       });
 
-      return tx.order.findUniqueOrThrow({ where: { id } });
+      const payment = await tx.payment.findUnique({ where: { orderId: id } });
+      if (payment?.status === 'PENDING') {
+        await tx.payment.update({
+          where: { id: payment.id },
+          data: { status: 'CANCELLED' },
+        });
+        await tx.paymentEvent.create({
+          data: {
+            paymentId: payment.id,
+            actorType: 'CUSTOMER',
+            actorId: userId,
+            eventType: 'PAYMENT_CANCELLED_WITH_ORDER',
+            fromStatus: 'PENDING',
+            toStatus: 'CANCELLED',
+          },
+        });
+      }
+
+      return tx.order.findUniqueOrThrow({
+        where: { id },
+        include: { payment: true },
+      });
     });
 
     this.realtime.publish(id, 'ORDER_STATUS');
@@ -224,6 +304,7 @@ export class OrdersService {
     deliveredAt: Date | null;
     cancelledAt: Date | null;
     updatedAt: Date;
+    payment?: SerializedPaymentSource | null;
   }) {
     return {
       id: order.id,
@@ -241,6 +322,7 @@ export class OrdersService {
         order.finalPrice === null ? null : Number(order.finalPrice),
       currency: 'TOMAN',
       status: order.status,
+      payment: order.payment ? this.serializePayment(order.payment) : null,
       notes: order.notes,
       createdAt: order.createdAt,
       assignedAt: order.assignedAt,
@@ -248,6 +330,21 @@ export class OrdersService {
       deliveredAt: order.deliveredAt,
       cancelledAt: order.cancelledAt,
       updatedAt: order.updatedAt,
+    };
+  }
+
+  private serializePayment(payment: SerializedPaymentSource) {
+    return {
+      id: payment.id,
+      method: payment.method,
+      status: payment.status,
+      amountToman: Number(payment.amount),
+      currency: 'TOMAN',
+      provider: payment.provider,
+      providerReference: payment.providerReference,
+      paidAt: payment.paidAt,
+      createdAt: payment.createdAt,
+      updatedAt: payment.updatedAt,
     };
   }
 }
