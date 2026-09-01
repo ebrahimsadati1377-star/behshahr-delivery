@@ -4,6 +4,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { AdminPricingService } from './admin-pricing.service';
 import { AdminService } from './admin.service';
 import { AssignOrderDto } from './dto/assign-order.dto';
 import { CreatePricingRuleDto } from './dto/create-pricing-rule.dto';
@@ -12,7 +13,10 @@ import { CreatePricingRuleDto } from './dto/create-pricing-rule.dto';
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('ADMIN')
 export class AdminController {
-  constructor(private readonly admin: AdminService) {}
+  constructor(
+    private readonly admin: AdminService,
+    private readonly pricing: AdminPricingService,
+  ) {}
 
   @Get('orders')
   orders() {
@@ -31,17 +35,17 @@ export class AdminController {
 
   @Get('pricing-rules')
   pricingRules() {
-    return this.admin.pricingRules();
+    return this.pricing.list();
   }
 
   @Post('pricing-rules')
   createPricingRule(@Body() dto: CreatePricingRuleDto) {
-    return this.admin.createPricingRule(dto);
+    return this.pricing.create(dto);
   }
 
   @Post('pricing-rules/:id/deactivate')
   deactivatePricingRule(@Param('id') id: string) {
-    return this.admin.deactivatePricingRule(id);
+    return this.pricing.deactivate(id);
   }
 
   @Post('orders/:id/assign')
