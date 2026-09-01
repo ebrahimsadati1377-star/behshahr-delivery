@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   ServiceUnavailableException,
   UnauthorizedException,
@@ -24,14 +25,20 @@ export class WooCommerceIntegrationService {
   async createOrder(apiKey: string | undefined, dto: CreateWooCommerceOrderDto) {
     this.assertApiKey(apiKey);
 
+    const storeId = dto.storeId.trim();
+    const externalOrderId = dto.externalOrderId.trim();
+    if (!storeId || !externalOrderId) {
+      throw new BadRequestException('Store ID and external order ID are required');
+    }
+
     const existing = await this.orders.findIntegrationOrder(
       PROVIDER,
-      dto.storeId,
-      dto.externalOrderId,
+      storeId,
+      externalOrderId,
     );
     if (existing) return existing;
 
-    const storeUser = await this.ensureStoreCustomer(dto.storeId);
+    const storeUser = await this.ensureStoreCustomer(storeId);
     const pickup = this.addressSnapshot(dto.pickup);
     const dropoff = this.addressSnapshot(dto.dropoff);
     const quote = await this.quotes.createFromSnapshots(
@@ -44,9 +51,9 @@ export class WooCommerceIntegrationService {
     return this.orders.createFromIntegration(storeUser.id, {
       quoteId: quote.quoteId,
       provider: PROVIDER,
-      storeId: dto.storeId,
-      externalOrderId: dto.externalOrderId,
-      recipientName: dto.customer.name,
+      storeId,
+      externalOrderId,
+      recipientName: dto.customer.name.trim(),
       recipientPhone: this.normalizeIranianPhone(dto.customer.phone),
       notes: this.orderNotes(dto),
       upstreamPaid: dto.payment?.paid ?? false,
@@ -72,9 +79,15 @@ export class WooCommerceIntegrationService {
     longitude: number;
     details?: string;
   }): AddressSnapshot {
+    const title = address.title.trim();
+    const formattedAddress = address.formattedAddress.trim();
+    if (!title || !formattedAddress) {
+      throw new BadRequestException('Pickup and dropoff addresses are required');
+    }
+
     return {
-      title: address.title.trim(),
-      formattedAddress: address.formattedAddress.trim(),
+      title,
+      formattedAddress,
       latitude: address.latitude,
       longitude: address.longitude,
       details: address.details?.trim() || null,
@@ -83,7 +96,7 @@ export class WooCommerceIntegrationService {
 
   private orderNotes(dto: CreateWooCommerceOrderDto): string {
     const parts = [
-      `WooCommerce #${dto.externalOrderId}`,
+      `WooCommerce #${dto.externalOrderId.trim()}`,
       `گیرنده: ${dto.customer.name.trim()}`,
       `تلفن: ${this.normalizeIranianPhone(dto.customer.phone)}`,
     ];
@@ -96,7 +109,7 @@ export class WooCommerceIntegrationService {
     if (/^09\d{9}$/.test(value)) return `+98${value.slice(1)}`;
     if (/^989\d{9}$/.test(value)) return `+${value}`;
     if (/^\+989\d{9}$/.test(value)) return value;
-    throw new UnauthorizedException('Invalid Iranian customer phone');
+    throw new BadRequestException('Invalid Iranian customer phone');
   }
 
   private assertApiKey(provided: string | undefined): void {
