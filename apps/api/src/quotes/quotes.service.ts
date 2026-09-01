@@ -47,8 +47,10 @@ export class QuotesService {
       longitude: dropoffSnapshot.longitude,
     };
 
-    this.serviceArea.assertWithinServiceArea(pickupCoordinate, 'Pickup');
-    this.serviceArea.assertWithinServiceArea(dropoffCoordinate, 'Dropoff');
+    await Promise.all([
+      this.serviceArea.assertWithinServiceArea(pickupCoordinate, 'Pickup'),
+      this.serviceArea.assertWithinServiceArea(dropoffCoordinate, 'Dropoff'),
+    ]);
 
     const [route, pricingRule] = await Promise.all([
       this.routing.estimate(pickupCoordinate, dropoffCoordinate),
