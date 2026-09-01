@@ -4,9 +4,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
+import { concat, defer, from, interval, map, merge, of, switchMap } from 'rxjs';
 import { PrismaService } from '../database/prisma.service';
 import { LockedQuote } from '../quotes/quote.types';
 import { QuotesService } from '../quotes/quotes.service';
+import { OrderRealtimeService } from '../realtime/order-realtime.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 
 @Injectable()
@@ -14,6 +16,7 @@ export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly quotes: QuotesService,
+    private readonly realtime: OrderRealtimeService,
   ) {}
 
   async create(userId: string, dto: CreateOrderDto) {
@@ -121,6 +124,30 @@ export class OrdersService {
     };
   }
 
+  stream(userId: string, id: string) {
+    const snapshot = () =>
+      defer(() => from(this.get(userId, id))).pipe(
+        map((data) => ({ type: 'order', data })),
+      );
+
+    return snapshot().pipe(
+      switchMap((initial) =>
+        concat(
+          of(initial),
+          merge(
+            this.realtime.subscribe(id).pipe(switchMap(() => snapshot())),
+            interval(20_000).pipe(
+              map(() => ({
+                type: 'ping',
+                data: { at: new Date().toISOString() },
+              })),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   async cancel(userId: string, id: string) {
     const current = await this.prisma.order.findFirst({
       where: { id, customerId: userId },
@@ -167,6 +194,7 @@ export class OrdersService {
       return tx.order.findUniqueOrThrow({ where: { id } });
     });
 
+    this.realtime.publish(id, 'ORDER_STATUS');
     return this.serializeOrder(cancelled);
   }
 
