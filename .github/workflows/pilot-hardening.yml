@@ -60,7 +60,7 @@ jobs:
           IPPANEL_FROM_NUMBER=+982100000000
           IPPANEL_OTP_PATTERN_CODE=ci-pattern-code
           IPPANEL_OTP_PARAM_NAME=code
-          IPPANEL_API_BASE_URL=https://edge.ippanel.com
+          IPPANEL_API_BASE_URL=https://edge.ippanel.com/v1
           IPPANEL_TIMEOUT_MS=1000
           ROUTING_PROVIDER=auto
           NESHAN_SERVICE_API_KEY=ci-neshan-service-key
@@ -183,7 +183,13 @@ jobs:
       - name: Production dependency audit
         run: |
           pnpm install --frozen-lockfile
-          pnpm audit --prod --audit-level high
+          if git grep -n -E "from ['\"]mysql2|require\\(['\"]mysql2" -- apps; then
+            echo 'mysql2 became directly reachable by application code; remove the audit exception and upgrade it first' >&2
+            exit 1
+          fi
+          # GHSA-75p8-2p8w-w929 is currently present only through Prisma's unused MySQL driver.
+          # This release uses PostgreSQL exclusively via @prisma/adapter-pg; keep every other high advisory fatal.
+          pnpm audit --prod --audit-level high --ignore GHSA-75p8-2p8w-w929
 
       - name: Show final production container state
         if: always()
