@@ -1,0 +1,162 @@
+name: IPPanel SMS
+
+on:
+  pull_request:
+    paths:
+      - "apps/api/src/auth/**"
+      - "apps/api/.env.example"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/ippanel-sms.yml"
+
+jobs:
+  verify-ippanel-sms:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/behshahr_delivery?schema=public
+      REDIS_URL: redis://localhost:6379
+      API_PORT: 4000
+      NODE_ENV: test
+      SMS_PROVIDER: ippanel
+      DEV_OTP_CODE: "654321"
+      OTP_SECRET: ci-otp-secret-change-me
+      JWT_ACCESS_SECRET: ci-access-secret-change-me
+      JWT_REFRESH_SECRET: ci-refresh-secret-change-me
+      IPPANEL_API_KEY: ci-fake-access-key
+      IPPANEL_FROM_NUMBER: "+983000505"
+      IPPANEL_OTP_PATTERN_CODE: ci-pattern-code
+      IPPANEL_OTP_PARAM_NAME: code
+      IPPANEL_API_BASE_URL: http://127.0.0.1:4400/v1
+      IPPANEL_TIMEOUT_MS: 2000
+      SERVICE_CENTER_LAT: "36.700000"
+      SERVICE_CENTER_LNG: "53.550000"
+      SERVICE_RADIUS_METERS: "20000"
+      ROUTING_PROVIDER: approximate
+      ROUTE_DISTANCE_FACTOR: "1.25"
+      ROUTE_AVG_SPEED_KMH: "25"
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: behshahr_delivery
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres -d behshahr_delivery"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm --filter @behshahr-delivery/api prisma:migrate:deploy
+      - run: pnpm --filter @behshahr-delivery/api typecheck
+      - run: pnpm --filter @behshahr-delivery/api build
+      - name: Start IPPanel mock and API
+        run: |
+          node <<'NODE' > /tmp/ippanel-mock.log 2>&1 &
+          const http = require('http');
+          const fs = require('fs');
+          const attempts = new Map();
+          const server = http.createServer((req, res) => {
+            if (req.method !== 'POST' || req.url !== '/v1/api/send') {
+              res.writeHead(404, {'content-type':'application/json'});
+              return res.end('{}');
+            }
+            let raw = '';
+            req.on('data', chunk => raw += chunk);
+            req.on('end', () => {
+              const body = JSON.parse(raw || '{}');
+              fs.appendFileSync('/tmp/ippanel-requests.ndjson', JSON.stringify({authorization:req.headers.authorization,body}) + '\n');
+              const recipient = body.recipients?.[0] ?? '';
+              const count = (attempts.get(recipient) ?? 0) + 1;
+              attempts.set(recipient, count);
+              if (recipient === '+989121119999' && count === 1) {
+                res.writeHead(503, {'content-type':'application/json'});
+                return res.end(JSON.stringify({data:null,meta:{status:false,message:'temporary failure',message_code:'503-test'}}));
+              }
+              res.writeHead(200, {'content-type':'application/json'});
+              res.end(JSON.stringify({data:{message_outbox_ids:[123]},meta:{status:true,message:'ok',message_code:'200-1'}}));
+            });
+          });
+          server.listen(4400, '127.0.0.1');
+          NODE
+          MOCK_PID=$!
+          pnpm --filter @behshahr-delivery/api start > /tmp/ippanel-api.log 2>&1 &
+          API_PID=$!
+          echo "$MOCK_PID" > /tmp/ippanel-mock.pid
+          echo "$API_PID" > /tmp/ippanel-api.pid
+
+          READY=0
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4000/api/health >/dev/null; then READY=1; break; fi
+            sleep 1
+          done
+          if [ "$READY" -ne 1 ]; then
+            cat /tmp/ippanel-mock.log || true
+            cat /tmp/ippanel-api.log || true
+            exit 1
+          fi
+      - name: Verify IPPanel OTP integration and retry rollback
+        run: |
+          node <<'NODE'
+          const api = 'http://127.0.0.1:4000/api';
+          async function call(path, options = {}, expected) {
+            const response = await fetch(`${api}${path}`, options);
+            const body = await response.json().catch(() => ({}));
+            if (expected !== undefined && response.status !== expected) throw new Error(`${path} expected ${expected}, got ${response.status}: ${JSON.stringify(body)}`);
+            if (expected === undefined && !response.ok) throw new Error(`${path} failed ${response.status}: ${JSON.stringify(body)}`);
+            return body;
+          }
+          const jsonHeaders = {'content-type':'application/json'};
+
+          await call('/auth/request-otp', {method:'POST',headers:jsonHeaders,body:JSON.stringify({phone:'09121112222'})});
+          const session = await call('/auth/verify-otp', {method:'POST',headers:jsonHeaders,body:JSON.stringify({phone:'09121112222',code:'654321'})});
+          if (!session.accessToken || session.user?.phone !== '+989121112222') throw new Error('OTP session verification failed');
+
+          await call('/auth/request-otp', {method:'POST',headers:jsonHeaders,body:JSON.stringify({phone:'09121119999'})}, 503);
+          const retry = await call('/auth/request-otp', {method:'POST',headers:jsonHeaders,body:JSON.stringify({phone:'09121119999'})});
+          if (retry.status !== 'sent') throw new Error('SMS failure did not release OTP cooldown');
+          NODE
+
+          node <<'NODE'
+          const fs = require('fs');
+          const lines = fs.readFileSync('/tmp/ippanel-requests.ndjson', 'utf8').trim().split('\n').map(JSON.parse);
+          if (lines.length < 3) throw new Error(`expected at least 3 IPPanel requests, got ${lines.length}`);
+          const first = lines[0];
+          if (first.authorization !== 'ci-fake-access-key') throw new Error('Authorization header mismatch');
+          if (first.body.sending_type !== 'pattern') throw new Error('sending_type mismatch');
+          if (first.body.from_number !== '+983000505') throw new Error('from_number mismatch');
+          if (first.body.code !== 'ci-pattern-code') throw new Error('pattern code mismatch');
+          if (first.body.recipients?.[0] !== '+989121112222') throw new Error('recipient normalization mismatch');
+          if (first.body.params?.code !== '654321') throw new Error('OTP pattern parameter mismatch');
+          NODE
+      - name: Verify console SMS cannot start in production
+        run: |
+          kill "$(cat /tmp/ippanel-api.pid)" || true
+          sleep 1
+          set +e
+          timeout 5s env NODE_ENV=production SMS_PROVIDER=console pnpm --filter @behshahr-delivery/api start > /tmp/console-production.log 2>&1
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -eq 0 ] || [ "$STATUS" -eq 124 ]; then
+            cat /tmp/console-production.log
+            echo "API unexpectedly started with console SMS in production"
+            exit 1
+          fi
+          grep -q "SMS_PROVIDER=console is not allowed in production" /tmp/console-production.log
+      - name: Cleanup
+        if: always()
+        run: |
+          if [ -f /tmp/ippanel-api.pid ]; then kill "$(cat /tmp/ippanel-api.pid)" || true; fi
+          if [ -f /tmp/ippanel-mock.pid ]; then kill "$(cat /tmp/ippanel-mock.pid)" || true; fi
