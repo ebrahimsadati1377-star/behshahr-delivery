@@ -26,7 +26,7 @@ echo "[dekan-deploy] applying database migrations"
 echo "[dekan-deploy] starting application services"
 "${compose[@]}" up -d api courier admin
 
-for attempt in {1..45}; do
+for _ in {1..45}; do
   if curl --fail --silent --max-time 3 "http://127.0.0.1:${DEKAN_API_PORT:-4000}/api/health" >/dev/null \
     && curl --fail --silent --max-time 3 "http://127.0.0.1:${DEKAN_COURIER_PORT:-3001}/" >/dev/null \
     && curl --fail --silent --max-time 3 "http://127.0.0.1:${DEKAN_ADMIN_PORT:-3002}/" >/dev/null; then
