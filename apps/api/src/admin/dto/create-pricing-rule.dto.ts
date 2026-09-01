@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsNumber, Max, Min } from 'class-validator';
+import { IsIn, IsInt, IsNumber, Min } from 'class-validator';
 
 export class CreatePricingRuleDto {
   @IsIn(['MOTORBIKE', 'CAR'])
@@ -28,6 +28,5 @@ export class CreatePricingRuleDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @Min(0.1)
-  @Max(10)
   surgeMultiplier!: number;
 }
