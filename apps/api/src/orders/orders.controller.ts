@@ -5,6 +5,7 @@ import {
   Param,
   ParseUUIDPipe,
   Post,
+  Sse,
   UseGuards,
 } from '@nestjs/common';
 import { AuthenticatedUser } from '../auth/auth.types';
@@ -29,6 +30,14 @@ export class OrdersController {
   @Get()
   list(@CurrentUser() user: AuthenticatedUser) {
     return this.ordersService.list(user.id);
+  }
+
+  @Sse(':id/stream')
+  stream(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+  ) {
+    return this.ordersService.stream(user.id, id);
   }
 
   @Get(':id')
