@@ -74,6 +74,15 @@ export class OrdersService {
         events: {
           orderBy: { createdAt: 'asc' },
         },
+        courier: {
+          select: {
+            vehicleType: true,
+            status: true,
+            lastLatitude: true,
+            lastLongitude: true,
+            lastSeenAt: true,
+          },
+        },
       },
     });
 
@@ -81,8 +90,24 @@ export class OrdersService {
       throw new NotFoundException('Order not found');
     }
 
+    const canTrackCourier = Boolean(
+      order.courier &&
+        (order.status === 'ASSIGNED' || order.status === 'PICKED_UP') &&
+        order.courier.lastLatitude !== null &&
+        order.courier.lastLongitude !== null,
+    );
+
     return {
       ...this.serializeOrder(order),
+      courierTracking: canTrackCourier
+        ? {
+            vehicleType: order.courier!.vehicleType,
+            status: order.courier!.status,
+            latitude: Number(order.courier!.lastLatitude),
+            longitude: Number(order.courier!.lastLongitude),
+            lastSeenAt: order.courier!.lastSeenAt,
+          }
+        : null,
       events: order.events.map((event) => ({
         id: event.id.toString(),
         actorType: event.actorType,

@@ -1,0 +1,215 @@
+name: Customer Tracking
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify-customer-tracking:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/behshahr_delivery?schema=public
+      REDIS_URL: redis://localhost:6379
+      API_PORT: 4000
+      NODE_ENV: test
+      SMS_PROVIDER: console
+      DEV_OTP_CODE: "123456"
+      OTP_SECRET: tracking-ci-otp-secret
+      JWT_ACCESS_SECRET: tracking-ci-access-secret
+      JWT_REFRESH_SECRET: tracking-ci-refresh-secret
+      SERVICE_CENTER_LAT: "36.700000"
+      SERVICE_CENTER_LNG: "53.550000"
+      SERVICE_RADIUS_METERS: "20000"
+      ROUTING_PROVIDER: approximate
+      ROUTE_DISTANCE_FACTOR: "1.25"
+      ROUTE_AVG_SPEED_KMH: "25"
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_DB: behshahr_delivery
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d behshahr_delivery"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm --filter @behshahr-delivery/api prisma:migrate:deploy
+      - name: Seed tracking fixtures
+        run: |
+          pnpm --filter @behshahr-delivery/api exec node <<'NODE'
+          const { Client } = require('pg');
+          (async () => {
+            const db = new Client({ connectionString: process.env.DATABASE_URL });
+            await db.connect();
+            await db.query(`
+              INSERT INTO "pricing_rules" (
+                "id", "vehicle_type", "base_fare", "included_distance_meters",
+                "per_km_fare", "minimum_fare", "surge_multiplier", "is_active",
+                "created_at", "updated_at"
+              ) VALUES (
+                '00000000-0000-4000-8000-000000000101', 'MOTORBIKE', 50000, 1000,
+                15000, 50000, 1.00, true, NOW(), NOW()
+              );
+
+              INSERT INTO "users" (
+                "id", "phone", "role", "status", "created_at", "updated_at"
+              ) VALUES (
+                '00000000-0000-4000-8000-000000000110', '+989111111110', 'COURIER', 'ACTIVE', NOW(), NOW()
+              );
+
+              INSERT INTO "couriers" (
+                "id", "user_id", "vehicle_type", "status", "created_at", "updated_at"
+              ) VALUES (
+                '00000000-0000-4000-8000-000000000111', '00000000-0000-4000-8000-000000000110',
+                'MOTORBIKE', 'OFFLINE', NOW(), NOW()
+              );
+            `);
+            await db.end();
+          })().catch((error) => { console.error(error); process.exit(1); });
+          NODE
+      - run: pnpm --filter @behshahr-delivery/api build
+      - name: Verify customer tracking lifecycle and privacy
+        run: |
+          pnpm --filter @behshahr-delivery/api start > /tmp/tracking-api.log 2>&1 &
+          API_PID=$!
+          trap 'kill $API_PID || true' EXIT
+
+          for attempt in {1..25}; do
+            curl --fail --silent http://127.0.0.1:4000/api/health >/dev/null && break
+            if [ "$attempt" -eq 25 ]; then cat /tmp/tracking-api.log; exit 1; fi
+            sleep 1
+          done
+
+          node <<'NODE'
+          const base = 'http://127.0.0.1:4000/api';
+
+          async function request(path, options = {}, expectedStatus) {
+            const response = await fetch(`${base}${path}`, {
+              ...options,
+              headers: {
+                'content-type': 'application/json',
+                ...(options.headers ?? {}),
+              },
+            });
+            const body = await response.json().catch(() => ({}));
+            if (expectedStatus !== undefined && response.status !== expectedStatus) {
+              throw new Error(`${path} expected ${expectedStatus}, got ${response.status}: ${JSON.stringify(body)}`);
+            }
+            if (expectedStatus === undefined && !response.ok) {
+              throw new Error(`${path} failed ${response.status}: ${JSON.stringify(body)}`);
+            }
+            return body;
+          }
+
+          async function login(phone) {
+            await request('/auth/request-otp', {
+              method: 'POST', body: JSON.stringify({ phone }),
+            });
+            return request('/auth/verify-otp', {
+              method: 'POST', body: JSON.stringify({ phone, code: '123456' }),
+            });
+          }
+
+          const customer = await login('+989122222220');
+          const courier = await login('+989111111110');
+          const customerHeaders = { authorization: `Bearer ${customer.accessToken}` };
+          const courierHeaders = { authorization: `Bearer ${courier.accessToken}` };
+
+          const pickup = await request('/addresses', {
+            method: 'POST', headers: customerHeaders,
+            body: JSON.stringify({
+              title: 'Pickup', formattedAddress: 'Tracking pickup',
+              latitude: 36.700000, longitude: 53.550000,
+            }),
+          });
+          const dropoff = await request('/addresses', {
+            method: 'POST', headers: customerHeaders,
+            body: JSON.stringify({
+              title: 'Dropoff', formattedAddress: 'Tracking dropoff',
+              latitude: 36.710000, longitude: 53.560000,
+            }),
+          });
+
+          const quote = await request('/quotes', {
+            method: 'POST', headers: customerHeaders,
+            body: JSON.stringify({
+              pickupAddressId: pickup.id,
+              dropoffAddressId: dropoff.id,
+              vehicleType: 'MOTORBIKE',
+            }),
+          });
+          const order = await request('/orders', {
+            method: 'POST', headers: customerHeaders,
+            body: JSON.stringify({ quoteId: quote.quoteId }),
+          });
+
+          let detail = await request(`/orders/${order.id}`, { headers: customerHeaders });
+          if (detail.courierTracking !== null) {
+            throw new Error(`tracking leaked before assignment: ${JSON.stringify(detail.courierTracking)}`);
+          }
+
+          await request('/courier/location', {
+            method: 'POST', headers: courierHeaders,
+            body: JSON.stringify({ latitude: 36.701234, longitude: 53.551234 }),
+          });
+          await request('/courier/availability', {
+            method: 'PATCH', headers: courierHeaders,
+            body: JSON.stringify({ status: 'AVAILABLE' }),
+          });
+          await request(`/courier/orders/${order.id}/accept`, {
+            method: 'POST', headers: courierHeaders,
+          });
+
+          detail = await request(`/orders/${order.id}`, { headers: customerHeaders });
+          if (!detail.courierTracking) throw new Error('tracking missing after assignment');
+          if (
+            Math.abs(detail.courierTracking.latitude - 36.701234) > 0.000001 ||
+            Math.abs(detail.courierTracking.longitude - 53.551234) > 0.000001
+          ) {
+            throw new Error(`unexpected tracking coordinates: ${JSON.stringify(detail.courierTracking)}`);
+          }
+          if (!detail.courierTracking.lastSeenAt) throw new Error('tracking lastSeenAt missing');
+
+          await request('/courier/location', {
+            method: 'POST', headers: courierHeaders,
+            body: JSON.stringify({ latitude: 36.705000, longitude: 53.555000 }),
+          });
+          await request(`/courier/orders/${order.id}/picked-up`, {
+            method: 'POST', headers: courierHeaders,
+          });
+
+          detail = await request(`/orders/${order.id}`, { headers: customerHeaders });
+          if (!detail.courierTracking || Math.abs(detail.courierTracking.latitude - 36.705000) > 0.000001) {
+            throw new Error(`tracking did not update while active: ${JSON.stringify(detail.courierTracking)}`);
+          }
+
+          await request(`/courier/orders/${order.id}/delivered`, {
+            method: 'POST', headers: courierHeaders,
+          });
+          detail = await request(`/orders/${order.id}`, { headers: customerHeaders });
+          if (detail.status !== 'DELIVERED') throw new Error(`unexpected final status: ${detail.status}`);
+          if (detail.courierTracking !== null) {
+            throw new Error(`tracking leaked after delivery: ${JSON.stringify(detail.courierTracking)}`);
+          }
+          NODE
