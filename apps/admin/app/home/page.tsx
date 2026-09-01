@@ -27,7 +27,7 @@ export default function AdminHome(){
  async function logout(){await fetch('/api/session/logout',{method:'POST'}).catch(()=>undefined);router.replace('/')}
  const eligible=detail?couriers.filter(c=>c.status==='AVAILABLE'&&c.vehicleType===detail.vehicleType):[];
  return <main className="admin-shell">
-  <header className="topbar"><div className="identity"><div className="mark">م</div><div><span>ارسال بهشهر</span><strong>مرکز عملیات</strong></div></div><div className="top-actions"><button className="tiny-button" onClick={()=>void load()}>بروزرسانی</button><button className="tiny-button" onClick={()=>void logout()}>خروج</button></div></header>
+  <header className="topbar"><div className="identity"><div className="mark">م</div><div><span>ارسال بهشهر</span><strong>مرکز عملیات</strong></div></div><div className="top-actions"><button className="tiny-button" onClick={()=>router.push('/pricing')}>قیمت‌گذاری</button><button className="tiny-button" onClick={()=>void load()}>بروزرسانی</button><button className="tiny-button" onClick={()=>void logout()}>خروج</button></div></header>
   {error?<p className="error">{error}</p>:null}
   <section className="summary"><div className="card metric"><span>سفارش جدید</span><strong>{counts.requested.toLocaleString('fa-IR')}</strong></div><div className="card metric"><span>مأموریت فعال</span><strong>{counts.active.toLocaleString('fa-IR')}</strong></div><div className="card metric"><span>پیک آماده</span><strong>{counts.available.toLocaleString('fa-IR')}</strong></div><div className="card metric"><span>تحویل‌شده در لیست</span><strong>{counts.delivered.toLocaleString('fa-IR')}</strong></div></section>
   <div className="workspace">
