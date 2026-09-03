@@ -1,6 +1,8 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
+  NotFoundException,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -10,7 +12,9 @@ import { Prisma } from '../../generated/prisma/client';
 import { OrdersService } from '../../orders/orders.service';
 import { AddressSnapshot } from '../../quotes/quote.types';
 import { QuotesService } from '../../quotes/quotes.service';
+import { OrderRealtimeService } from '../../realtime/order-realtime.service';
 import { CreateWooCommerceOrderDto } from './dto/create-woocommerce-order.dto';
+import { UpdateWooCommerceOrderStatusDto } from './dto/update-woocommerce-order-status.dto';
 
 const PROVIDER = 'woocommerce';
 
@@ -20,6 +24,7 @@ export class WooCommerceIntegrationService {
     private readonly prisma: PrismaService,
     private readonly quotes: QuotesService,
     private readonly orders: OrdersService,
+    private readonly realtime: OrderRealtimeService,
   ) {}
 
   async createOrder(apiKey: string | undefined, dto: CreateWooCommerceOrderDto) {
@@ -59,6 +64,97 @@ export class WooCommerceIntegrationService {
       upstreamPaid: dto.payment?.paid ?? false,
       sourcePayload: JSON.parse(JSON.stringify(dto)) as Prisma.InputJsonValue,
     });
+  }
+
+  async updateOrderStatus(
+    apiKey: string | undefined,
+    dto: UpdateWooCommerceOrderStatusDto,
+  ) {
+    this.assertApiKey(apiKey);
+
+    const storeId = dto.storeId.trim();
+    const externalOrderId = dto.externalOrderId.trim();
+    if (!storeId || !externalOrderId) {
+      throw new BadRequestException('Store ID and external order ID are required');
+    }
+
+    const link = await this.prisma.externalOrderLink.findUnique({
+      where: {
+        provider_storeId_externalOrderId: {
+          provider: PROVIDER,
+          storeId,
+          externalOrderId,
+        },
+      },
+      include: { order: true },
+    });
+
+    if (!link) {
+      throw new NotFoundException('WooCommerce order is not linked to Delivery');
+    }
+
+    if (link.order.status === 'DELIVERED') {
+      const existing = await this.orders.findIntegrationOrder(
+        PROVIDER,
+        storeId,
+        externalOrderId,
+      );
+      return { synced: false, alreadyCompleted: true, ...existing };
+    }
+
+    if (link.order.status === 'CANCELLED') {
+      throw new ConflictException('Cancelled Delivery order cannot be completed');
+    }
+
+    const completedAt = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.order.updateMany({
+        where: {
+          id: link.order.id,
+          status: { in: ['REQUESTED', 'ASSIGNED', 'PICKED_UP'] },
+        },
+        data: {
+          status: 'DELIVERED',
+          deliveredAt: completedAt,
+          finalPrice: link.order.quotedPrice,
+        },
+      });
+
+      if (updated.count !== 1) {
+        throw new ConflictException('Order state changed; retry status sync');
+      }
+
+      if (link.order.courierId) {
+        await tx.courier.update({
+          where: { id: link.order.courierId },
+          data: { status: 'AVAILABLE' },
+        });
+      }
+
+      await tx.orderEvent.create({
+        data: {
+          orderId: link.order.id,
+          actorType: 'SYSTEM',
+          eventType: 'ORDER_DELIVERED_FROM_WOOCOMMERCE',
+          fromStatus: link.order.status,
+          toStatus: 'DELIVERED',
+          metadata: {
+            provider: PROVIDER,
+            storeId,
+            externalOrderId,
+            upstreamStatus: dto.status,
+          },
+        },
+      });
+    });
+
+    this.realtime.publish(link.order.id, 'ORDER_STATUS');
+    const synced = await this.orders.findIntegrationOrder(
+      PROVIDER,
+      storeId,
+      externalOrderId,
+    );
+    return { synced: true, alreadyCompleted: false, ...synced };
   }
 
   private async ensureStoreCustomer(storeId: string) {

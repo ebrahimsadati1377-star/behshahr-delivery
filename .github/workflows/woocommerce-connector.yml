@@ -104,7 +104,7 @@ jobs:
           else
             echo "php CLI not available on runner; skipping syntax check"
           fi
-      - name: Verify authentication and idempotent order import
+      - name: Verify authentication, idempotent import, and completed sync
         run: |
           pnpm --filter @behshahr-delivery/api start > /tmp/woocommerce-api.log 2>&1 &
           API_PID=$!
@@ -123,6 +123,7 @@ jobs:
 
           node <<'NODE'
           const url = 'http://127.0.0.1:4000/api/integrations/woocommerce/orders';
+          const statusUrl = `${url}/status`;
           const payload = {
             storeId: 'dekan-ci',
             externalOrderId: '38124',
@@ -142,8 +143,8 @@ jobs:
             metadata: { orderNumber: '38124' },
           };
 
-          async function send(key, body = payload) {
-            const response = await fetch(url, {
+          async function post(target, key, body) {
+            const response = await fetch(target, {
               method: 'POST',
               headers: {
                 'content-type': 'application/json',
@@ -153,6 +154,18 @@ jobs:
             });
             const data = await response.json().catch(() => ({}));
             return { response, data };
+          }
+
+          async function send(key, body = payload) {
+            return post(url, key, body);
+          }
+
+          async function complete(key, body = {
+            storeId: payload.storeId,
+            externalOrderId: payload.externalOrderId,
+            status: 'completed',
+          }) {
+            return post(statusUrl, key, body);
           }
 
           (async () => {
@@ -174,6 +187,30 @@ jobs:
             }
             if (second.data.order?.id !== first.data.order?.id) {
               throw new Error('duplicate import created a different Delivery order');
+            }
+
+            const deniedComplete = await complete('wrong-key');
+            if (deniedComplete.response.status !== 401) {
+              throw new Error(`wrong status-sync key expected 401, got ${deniedComplete.response.status}`);
+            }
+
+            const completed = await complete('ci-woocommerce-integration-key');
+            if (!completed.response.ok || completed.data.synced !== true) {
+              throw new Error(`completed sync failed: ${completed.response.status} ${JSON.stringify(completed.data)}`);
+            }
+            if (completed.data.order?.id !== first.data.order?.id) {
+              throw new Error('completed sync targeted a different Delivery order');
+            }
+            if (completed.data.order?.status !== 'DELIVERED') {
+              throw new Error(`completed Woo order did not become DELIVERED: ${JSON.stringify(completed.data)}`);
+            }
+
+            const completedAgain = await complete('ci-woocommerce-integration-key');
+            if (!completedAgain.response.ok || completedAgain.data.alreadyCompleted !== true) {
+              throw new Error(`idempotent completed sync failed: ${completedAgain.response.status} ${JSON.stringify(completedAgain.data)}`);
+            }
+            if (completedAgain.data.order?.id !== first.data.order?.id || completedAgain.data.order?.status !== 'DELIVERED') {
+              throw new Error('repeated completed sync changed the linked Delivery order');
             }
 
             const invalidPhonePayload = {

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Behshahr Delivery Connector
  * Description: Sends WooCommerce orders to the Behshahr Delivery dispatcher.
- * Version: 0.1.0
+ * Version: 0.2.0
  * Requires Plugins: woocommerce
  * Author: Behshahr Delivery
  */
@@ -17,6 +17,7 @@ final class BHD_Woo_Delivery_Connector {
     private const META_PUBLIC_CODE = '_bhd_delivery_public_code';
     private const META_LAST_SYNC = '_bhd_delivery_last_sync';
     private const ASYNC_HOOK = 'bhd_delivery_send_order';
+    private const STATUS_ASYNC_HOOK = 'bhd_delivery_sync_completed_order';
 
     public static function boot(): void {
         add_action('admin_init', [self::class, 'register_settings']);
@@ -25,6 +26,7 @@ final class BHD_Woo_Delivery_Connector {
         add_filter('woocommerce_order_actions', [self::class, 'order_actions']);
         add_action('woocommerce_order_action_bhd_send_to_delivery', [self::class, 'manual_send']);
         add_action(self::ASYNC_HOOK, [self::class, 'async_send'], 10, 1);
+        add_action(self::STATUS_ASYNC_HOOK, [self::class, 'async_sync_completed'], 10, 1);
     }
 
     public static function register_settings(): void {
@@ -75,7 +77,7 @@ final class BHD_Woo_Delivery_Connector {
         ?>
         <div class="wrap">
             <h1>Behshahr Delivery Connector</h1>
-            <p>سفارش ووکامرس را پس از رسیدن به وضعیت انتخابی به پنل دیسپچ ارسال می‌کند.</p>
+            <p>سفارش ووکامرس را پس از رسیدن به وضعیت انتخابی به پنل دیسپچ ارسال می‌کند و وضعیت completed را با Delivery همگام می‌کند.</p>
             <form method="post" action="options.php">
                 <?php settings_fields('bhd_delivery_connector'); ?>
                 <table class="form-table" role="presentation">
@@ -100,10 +102,17 @@ final class BHD_Woo_Delivery_Connector {
 
     public static function status_changed($order_id, $from, $to, $order): void {
         $settings = self::settings();
-        if ($settings['enabled'] !== '1' || $to !== $settings['trigger_status']) {
+        if ($settings['enabled'] !== '1') {
             return;
         }
-        self::enqueue((int)$order_id);
+
+        if ($to === $settings['trigger_status']) {
+            self::enqueue((int)$order_id);
+        }
+
+        if ($to === 'completed' && $order instanceof WC_Order && $order->get_meta(self::META_ORDER_ID, true)) {
+            self::enqueue_completed_sync((int)$order_id);
+        }
     }
 
     public static function order_actions(array $actions): array {
@@ -121,6 +130,10 @@ final class BHD_Woo_Delivery_Connector {
         self::send_order((int)$order_id, false);
     }
 
+    public static function async_sync_completed($order_id): void {
+        self::sync_completed_order((int)$order_id);
+    }
+
     private static function enqueue(int $order_id): void {
         if (function_exists('as_enqueue_async_action')) {
             if (!function_exists('as_next_scheduled_action') || !as_next_scheduled_action(self::ASYNC_HOOK, [$order_id], 'behshahr-delivery')) {
@@ -130,6 +143,18 @@ final class BHD_Woo_Delivery_Connector {
         }
         if (!wp_next_scheduled(self::ASYNC_HOOK, [$order_id])) {
             wp_schedule_single_event(time() + 5, self::ASYNC_HOOK, [$order_id]);
+        }
+    }
+
+    private static function enqueue_completed_sync(int $order_id): void {
+        if (function_exists('as_enqueue_async_action')) {
+            if (!function_exists('as_next_scheduled_action') || !as_next_scheduled_action(self::STATUS_ASYNC_HOOK, [$order_id], 'behshahr-delivery')) {
+                as_enqueue_async_action(self::STATUS_ASYNC_HOOK, [$order_id], 'behshahr-delivery');
+            }
+            return;
+        }
+        if (!wp_next_scheduled(self::STATUS_ASYNC_HOOK, [$order_id])) {
+            wp_schedule_single_event(time() + 5, self::STATUS_ASYNC_HOOK, [$order_id]);
         }
     }
 
@@ -162,11 +187,7 @@ final class BHD_Woo_Delivery_Connector {
         $response = wp_remote_post($settings['api_url'], [
             'timeout' => 12,
             'redirection' => 0,
-            'headers' => [
-                'Accept' => 'application/json',
-                'Content-Type' => 'application/json',
-                'X-Delivery-Key' => $settings['api_key'],
-            ],
+            'headers' => self::api_headers($settings),
             'body' => wp_json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
         ]);
 
@@ -194,6 +215,68 @@ final class BHD_Woo_Delivery_Connector {
         $duplicate = !empty($body['duplicate']) ? ' (قبلاً ثبت شده بود)' : '';
         $public_code = !empty($body['order']['publicCode']) ? ' - ' . sanitize_text_field((string)$body['order']['publicCode']) : '';
         $order->add_order_note('Behshahr Delivery: سفارش ارسال شد' . $public_code . $duplicate);
+    }
+
+    private static function sync_completed_order(int $order_id): void {
+        if (!function_exists('wc_get_order')) {
+            return;
+        }
+
+        $order = wc_get_order($order_id);
+        if (!$order instanceof WC_Order || $order->get_status() !== 'completed') {
+            return;
+        }
+
+        if (!$order->get_meta(self::META_ORDER_ID, true)) {
+            return;
+        }
+
+        $settings = self::settings();
+        $validation = self::validate_api_settings($settings);
+        if (is_wp_error($validation)) {
+            self::record_error($order, $validation->get_error_message());
+            return;
+        }
+
+        $status_url = rtrim($settings['api_url'], '/') . '/status';
+        $response = wp_remote_post($status_url, [
+            'timeout' => 12,
+            'redirection' => 0,
+            'headers' => self::api_headers($settings),
+            'body' => wp_json_encode([
+                'storeId' => $settings['store_id'],
+                'externalOrderId' => (string)$order->get_id(),
+                'status' => 'completed',
+            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+        ]);
+
+        if (is_wp_error($response)) {
+            self::record_error($order, 'همگام‌سازی completed: ' . $response->get_error_message());
+            return;
+        }
+
+        $status = (int)wp_remote_retrieve_response_code($response);
+        $raw = (string)wp_remote_retrieve_body($response);
+        $body = json_decode($raw, true);
+        if ($status < 200 || $status >= 300 || !is_array($body) || empty($body['order']['id'])) {
+            $message = is_array($body) && !empty($body['message']) ? (string)$body['message'] : ('HTTP ' . $status);
+            self::record_error($order, 'همگام‌سازی completed: ' . $message);
+            return;
+        }
+
+        $order->update_meta_data(self::META_LAST_SYNC, gmdate('c'));
+        $order->save();
+
+        $suffix = !empty($body['alreadyCompleted']) ? ' (قبلاً تکمیل شده بود)' : '';
+        $order->add_order_note('Behshahr Delivery: وضعیت completed همگام شد و سفارش Delivery بسته شد' . $suffix);
+    }
+
+    private static function api_headers(array $settings): array {
+        return [
+            'Accept' => 'application/json',
+            'Content-Type' => 'application/json',
+            'X-Delivery-Key' => $settings['api_key'],
+        ];
     }
 
     private static function payload(WC_Order $order, array $settings, array $coordinates): array {
@@ -300,7 +383,7 @@ final class BHD_Woo_Delivery_Connector {
             if ($raw === '') {
                 continue;
             }
-            if (!preg_match('/^\\s*(-?[0-9]+(?:\\.[0-9]+)?)\\s*[,;|،؛]\\s*(-?[0-9]+(?:\\.[0-9]+)?)\\s*$/u', $raw, $matches)) {
+            if (!preg_match('/^\s*(-?[0-9]+(?:\.[0-9]+)?)\s*[,;|،؛]\s*(-?[0-9]+(?:\.[0-9]+)?)\s*$/u', $raw, $matches)) {
                 continue;
             }
             $lat = (float)$matches[1];
@@ -323,9 +406,17 @@ final class BHD_Woo_Delivery_Connector {
         return null;
     }
 
-    private static function validate_settings(array $settings) {
+    private static function validate_api_settings(array $settings) {
         if ($settings['api_url'] === '' || $settings['api_key'] === '' || $settings['store_id'] === '') {
             return new WP_Error('bhd_config', 'API URL، Integration Key و Store ID باید تنظیم شوند.');
+        }
+        return true;
+    }
+
+    private static function validate_settings(array $settings) {
+        $api_validation = self::validate_api_settings($settings);
+        if (is_wp_error($api_validation)) {
+            return $api_validation;
         }
         if (!is_numeric($settings['pickup_latitude']) || !is_numeric($settings['pickup_longitude'])) {
             return new WP_Error('bhd_pickup', 'مختصات مبدا معتبر نیست.');
