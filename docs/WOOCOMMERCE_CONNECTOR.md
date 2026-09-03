@@ -4,15 +4,17 @@ This integration sends WooCommerce orders into Behshahr Delivery without exposin
 
 ## Scope
 
-Phase 1 is inbound only:
+The connector supports order creation plus WooCommerce `completed` status synchronization:
 
 1. WooCommerce reaches a configured order status (default `processing`).
 2. The WordPress connector sends the order to Delivery.
 3. Delivery validates the service area, calculates route/pricing, and creates a `REQUESTED` delivery order.
 4. The dispatcher assigns a courier as usual.
 5. The connector stores the Delivery order ID/public code in WooCommerce order meta.
+6. When the linked WooCommerce order becomes `completed`, the connector sends a status update to Delivery.
+7. Delivery idempotently changes the linked active order to `DELIVERED`; if a courier is attached, that courier is returned to `AVAILABLE`.
 
-Delivery-to-WooCommerce status callbacks are intentionally deferred to a later phase.
+Delivery-to-WooCommerce callbacks remain intentionally deferred. This status synchronization flows from WooCommerce to Delivery.
 
 ## Security
 
@@ -33,6 +35,8 @@ http://127.0.0.1:4000/api/integrations/woocommerce/orders
 Do not expose port `4000` publicly.
 
 ## API
+
+### Create/import order
 
 `POST /api/integrations/woocommerce/orders`
 
@@ -81,6 +85,22 @@ Example body:
 
 The combination `provider + storeId + externalOrderId` is unique. Re-sending the same WooCommerce order returns the existing Delivery order instead of creating a duplicate.
 
+### Sync completed status
+
+`POST /api/integrations/woocommerce/orders/status`
+
+Uses the same `X-Delivery-Key` header.
+
+```json
+{
+  "storeId": "dekan",
+  "externalOrderId": "38124",
+  "status": "completed"
+}
+```
+
+The update is idempotent. Calling it again for an already `DELIVERED` order returns the same linked order without creating a duplicate or repeating the transition. A cancelled Delivery order is not resurrected as delivered.
+
 ## WordPress plugin
 
 Plugin path in this repository:
@@ -107,7 +127,7 @@ Required settings:
 - pickup address and coordinates
 - WooCommerce order meta keys containing customer latitude/longitude
 
-The connector also checks several common latitude/longitude meta names automatically.
+The connector also checks several common latitude/longitude meta names automatically. Version `0.2.0` additionally watches linked orders for the WooCommerce `completed` transition and asynchronously posts the status to Delivery.
 
 ## Coordinate requirement
 
@@ -125,7 +145,7 @@ Set the key in `ops/dekan.env`:
 WOOCOMMERCE_INTEGRATION_KEY=<strong random value>
 ```
 
-Then recreate the API after deploying the migration/code:
+Then recreate the API after deploying the code:
 
 ```bash
 ENV_FILE=ops/dekan.env bash ops/dekan-deploy.sh
