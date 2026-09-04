@@ -103,20 +103,28 @@ export class WooCommerceIntegrationService {
     }
 
     if (link.order.status === 'CANCELLED') {
-      throw new ConflictException('Cancelled Delivery order cannot be completed');
+      return { synced: false, alreadyCancelled: true, order: link.order };
     }
 
-    const completedAt = new Date();
+    if (link.order.status === 'ASSIGNED' || link.order.status === 'PICKED_UP') {
+      return {
+        synced: false,
+        ignored: true,
+        reason: 'Courier delivery is already in progress',
+        order: link.order,
+      };
+    }
+
+    const cancelledAt = new Date();
     await this.prisma.$transaction(async (tx) => {
       const updated = await tx.order.updateMany({
         where: {
           id: link.order.id,
-          status: { in: ['REQUESTED', 'ASSIGNED', 'PICKED_UP'] },
+          status: 'REQUESTED',
         },
         data: {
-          status: 'DELIVERED',
-          deliveredAt: completedAt,
-          finalPrice: link.order.quotedPrice,
+          status: 'CANCELLED',
+          cancelledAt,
         },
       });
 
@@ -124,20 +132,13 @@ export class WooCommerceIntegrationService {
         throw new ConflictException('Order state changed; retry status sync');
       }
 
-      if (link.order.courierId) {
-        await tx.courier.update({
-          where: { id: link.order.courierId },
-          data: { status: 'AVAILABLE' },
-        });
-      }
-
       await tx.orderEvent.create({
         data: {
           orderId: link.order.id,
           actorType: 'SYSTEM',
-          eventType: 'ORDER_DELIVERED_FROM_WOOCOMMERCE',
+          eventType: 'ORDER_CANCELLED_FROM_WOOCOMMERCE',
           fromStatus: link.order.status,
-          toStatus: 'DELIVERED',
+          toStatus: 'CANCELLED',
           metadata: {
             provider: PROVIDER,
             storeId,

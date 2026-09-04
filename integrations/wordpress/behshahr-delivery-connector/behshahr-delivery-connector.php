@@ -110,7 +110,7 @@ final class BHD_Woo_Delivery_Connector {
             self::enqueue((int)$order_id);
         }
 
-        if ($to === 'completed' && $order instanceof WC_Order && $order->get_meta(self::META_ORDER_ID, true)) {
+        if (in_array($to, ['completed', 'approved'], true) && $order instanceof WC_Order && $order->get_meta(self::META_ORDER_ID, true)) {
             self::enqueue_completed_sync((int)$order_id);
         }
     }
@@ -223,7 +223,7 @@ final class BHD_Woo_Delivery_Connector {
         }
 
         $order = wc_get_order($order_id);
-        if (!$order instanceof WC_Order || $order->get_status() !== 'completed') {
+        if (!$order instanceof WC_Order || !in_array($order->get_status(), ['completed', 'approved'], true)) {
             return;
         }
 
