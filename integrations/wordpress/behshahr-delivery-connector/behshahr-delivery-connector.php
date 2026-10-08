@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Behshahr Delivery Connector
  * Description: Sends WooCommerce orders to the Behshahr Delivery dispatcher.
- * Version: 0.2.0
+ * Version: 0.3.0
  * Requires Plugins: woocommerce
  * Author: Behshahr Delivery
  */
@@ -158,7 +158,7 @@ final class BHD_Woo_Delivery_Connector {
         }
     }
 
-    private static function send_order(int $order_id, bool $force): void {
+    public static function send_order(int $order_id, bool $force): void {
         if (!function_exists('wc_get_order')) {
             return;
         }
@@ -463,3 +463,6 @@ final class BHD_Woo_Delivery_Connector {
 }
 
 add_action('plugins_loaded', [BHD_Woo_Delivery_Connector::class, 'boot']);
+
+require_once __DIR__ . '/includes/class-bhd-courier-dispatch.php';
+add_action('plugins_loaded', [BHD_Woo_Courier_Dispatch::class, 'boot']);

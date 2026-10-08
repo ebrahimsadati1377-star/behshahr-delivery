@@ -4,7 +4,7 @@ This integration sends WooCommerce orders into Behshahr Delivery without exposin
 
 ## Scope
 
-The connector supports order creation plus WooCommerce `completed` status synchronization:
+The connector supports order import, manual courier assignment from WooCommerce admin, and WooCommerce `completed` status synchronization:
 
 1. WooCommerce reaches a configured order status (default `processing`).
 2. The WordPress connector sends the order to Delivery.
@@ -152,3 +152,26 @@ ENV_FILE=ops/dekan.env bash ops/dekan-deploy.sh
 ```
 
 Do not copy `ops/dekan.env.example` over an existing production env file.
+
+## Assign a WooCommerce order to a courier
+
+WooCommerce order edit screens (classic and HPOS) contain a **«تخصیص راننده ارسال»** box (WordPress connector version 0.3.0).
+
+1. Open **WooCommerce → Orders**, then edit the WooCommerce order.
+2. The box queries the Delivery API for current couriers and linked-order state. Select an **AVAILABLE** courier with the order's vehicle type.
+3. Click **«ارسال سفارش به راننده»**. If the order has not been imported, the plugin first imports it through the existing idempotent WooCommerce connector. Then it assigns the linked Delivery order.
+4. The order becomes **ASSIGNED** and appears in that courier's current job in the Courier PWA. Reassigning is supported before pickup; once picked up or delivered, assignment is rejected.
+
+The plugin shows the assigned courier name in a WooCommerce orders-list column and adds an audit note to the order. The assignment action is authenticated with a WooCommerce manager session and order-specific WordPress nonce (server-side AJAX); API requests use the private **X-Delivery-Key** via loopback. Key values never enter browser JavaScript.
+
+### Endpoints (private integration key required)
+
+- `GET /api/integrations/woocommerce/couriers`: active courier profiles with current availability (phone, name, vehicle type and status).
+- `GET /api/integrations/woocommerce/orders/assignment?storeId=...&externalOrderId=...`: current Woo order linking and assigned courier, scoped to the configured store.
+- `POST /api/integrations/woocommerce/orders/assign`: `{storeId,externalOrderId,courierId}`. For a linked REQUESTED order assigns to an available courier; for ASSIGNED order reassigns before pickup. Duplicate same-courier assignment is idempotent. Concurrency-safe; mismatch, unavailable couriers, and non-dispatchable order states are rejected.
+
+**Important:** If the original WooCommerce order lacks shipping coordinates, importing the order will fail; this will appear in its WooCommerce order notes. The system does not guess an address or bypass service-area validation. GPS in the driver app works while the PWA is open. No driver wallet or salary calculation is provided by this feature.
+
+### WordPress deployment
+
+Copy the entire updated `integrations/wordpress/behshahr-delivery-connector` directory into the installed WordPress plugin directory, preserving the existing plugin settings. The new `includes/` PHP file and `assets/` JS file are required. The Delivery API code must be deployed **before** the updated WordPress plugin, or the new assignment controls will fail with a 404. No new database migration is required for this change.

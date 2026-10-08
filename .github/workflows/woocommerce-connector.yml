@@ -93,6 +93,16 @@ jobs:
                 15000, 50000, 1.00, true, NOW(), NOW()
               );
             `);
+            await client.query(`
+              INSERT INTO "users" ("id","phone","role","status","created_at","updated_at") VALUES
+                ('00000000-0000-4000-8000-000000000110','+989111111110','COURIER','ACTIVE',NOW(),NOW()),
+                ('00000000-0000-4000-8000-000000000120','+989111111120','COURIER','ACTIVE',NOW(),NOW()),
+                ('00000000-0000-4000-8000-000000000130','+989111111130','COURIER','ACTIVE',NOW(),NOW());
+              INSERT INTO "couriers" ("id","user_id","vehicle_type","full_name","status","created_at","updated_at") VALUES
+                ('00000000-0000-4000-8000-000000000111','00000000-0000-4000-8000-000000000110','MOTORBIKE','Driver One','AVAILABLE',NOW(),NOW()),
+                ('00000000-0000-4000-8000-000000000121','00000000-0000-4000-8000-000000000120','MOTORBIKE','Driver Two','AVAILABLE',NOW(),NOW()),
+                ('00000000-0000-4000-8000-000000000131','00000000-0000-4000-8000-000000000130','CAR','Driver Car','AVAILABLE',NOW(),NOW());
+            `);
             await client.end();
           })().catch((error) => { console.error(error); process.exit(1); });
           NODE
@@ -101,6 +111,7 @@ jobs:
         run: |
           if command -v php >/dev/null 2>&1; then
             php -l integrations/wordpress/behshahr-delivery-connector/behshahr-delivery-connector.php
+            php -l integrations/wordpress/behshahr-delivery-connector/includes/class-bhd-courier-dispatch.php
           else
             echo "php CLI not available on runner; skipping syntax check"
           fi
@@ -188,6 +199,88 @@ jobs:
             if (second.data.order?.id !== first.data.order?.id) {
               throw new Error('duplicate import created a different Delivery order');
             }
+
+
+            const key = 'ci-woocommerce-integration-key';
+            const baseUrl = 'http://127.0.0.1:4000/api/integrations/woocommerce';
+            const courierListUnauthorized = await fetch(baseUrl + '/couriers', {headers:{'x-delivery-key':'wrong-key'}});
+            if (courierListUnauthorized.status !== 401) throw new Error('courier list leaked without valid integration key');
+            const courierList = await fetch(baseUrl + '/couriers', {headers:{'x-delivery-key':key}});
+            const courierListBody = await courierList.json();
+            if (!courierList.ok || courierListBody.length !== 3) throw new Error('courier list incorrect');
+
+            const linkLookup = (storeId, externalOrderId) => baseUrl + '/orders/assignment?'
+              + new URLSearchParams({storeId,externalOrderId}).toString();
+            const target1='00000000-0000-4000-8000-000000000111';
+            const target2='00000000-0000-4000-8000-000000000121';
+            const targetCar='00000000-0000-4000-8000-000000000131';
+            const dispatchOrder = {...payload, externalOrderId:'38126', metadata:{orderNumber:'38126'}};
+            const unlinked=await post(baseUrl+'/orders/assign',key,{
+              storeId:payload.storeId,externalOrderId:'no-such-order',courierId:target1
+            });
+            if(unlinked.response.status!==404) throw new Error('unlinked order could be assigned');
+            const importDispatch = await send(key,dispatchOrder);
+            if(!importDispatch.response.ok || importDispatch.data.duplicate) throw new Error('dispatch order import failed');
+            const beforeAssignment = await (await fetch(linkLookup(dispatchOrder.storeId,dispatchOrder.externalOrderId),{
+              headers:{'x-delivery-key':key}
+            })).json();
+            if(!beforeAssignment.linked || beforeAssignment.status!=='REQUESTED') throw new Error('linked order not requested');
+            const mismatched = await post(baseUrl+'/orders/assign',key,{
+              storeId:dispatchOrder.storeId,externalOrderId:dispatchOrder.externalOrderId,courierId:targetCar
+            });
+            if(mismatched.response.status!==409) throw new Error('wrong vehicle accepted');
+
+            const assigned = await post(baseUrl+'/orders/assign',key,{
+              storeId:dispatchOrder.storeId,externalOrderId:dispatchOrder.externalOrderId,courierId:target1
+            });
+            if(!assigned.response.ok || assigned.data.status!=='ASSIGNED' || assigned.data.courierId!==target1) {
+              throw new Error('courier assignment failed: '+JSON.stringify(assigned.data));
+            }
+            const assignedAgain=await post(baseUrl+'/orders/assign',key,{
+              storeId:dispatchOrder.storeId,externalOrderId:dispatchOrder.externalOrderId,courierId:target1
+            });
+            if(!assignedAgain.response.ok || assignedAgain.data.unchanged!==true) throw new Error('duplicate assignment was not idempotent');
+
+            const busyReassignment=await post(baseUrl+'/orders/assign',key,{
+              storeId:dispatchOrder.storeId,externalOrderId:dispatchOrder.externalOrderId,courierId:target1
+            });
+            if(!busyReassignment.response.ok) throw new Error('same courier retry should succeed');
+
+            const reassigned=await post(baseUrl+'/orders/assign',key,{
+              storeId:dispatchOrder.storeId,externalOrderId:dispatchOrder.externalOrderId,courierId:target2
+            });
+            if(!reassigned.response.ok || reassigned.data.courierId!==target2) throw new Error('reassign failed');
+            const currentStatus=await (await fetch(linkLookup(dispatchOrder.storeId,dispatchOrder.externalOrderId),{
+              headers:{'x-delivery-key':key}
+            })).json();
+            if(currentStatus.status!=='ASSIGNED' || currentStatus.courierId!==target2) throw new Error('assignment GET inconsistent');
+            const couriersAfter=await (await fetch(baseUrl+'/couriers',{headers:{'x-delivery-key':key}})).json();
+            if(couriersAfter.find(c=>c.id===target1)?.status!=='AVAILABLE'
+              || couriersAfter.find(c=>c.id===target2)?.status!=='BUSY') throw new Error('courier statuses incorrect');
+
+            const loginPhone='+989111111120';
+            await fetch('http://127.0.0.1:4000/api/auth/request-otp',{
+              method:'POST',headers:{'content-type':'application/json'},
+              body:JSON.stringify({phone:loginPhone})
+            });
+            const verified=await (await fetch('http://127.0.0.1:4000/api/auth/verify-otp',{
+              method:'POST',headers:{'content-type':'application/json'},
+              body:JSON.stringify({phone:loginPhone,code:'123456'})
+            })).json();
+            if(!verified.accessToken) throw new Error('courier OTP login failed');
+            const current=await (await fetch('http://127.0.0.1:4000/api/courier/orders/current',{
+              headers:{authorization:'Bearer '+verified.accessToken}
+            })).json();
+            if(current?.id!==importDispatch.data.order.id) throw new Error('assigned Woo order not visible in courier panel');
+
+            const deniedAssign=await post(baseUrl+'/orders/assign','wrong-key',{
+              storeId:dispatchOrder.storeId,externalOrderId:dispatchOrder.externalOrderId,courierId:target1
+            });
+            if(deniedAssign.response.status!==401) throw new Error('invalid key accepted by assignment API');
+            const crossStore=await post(baseUrl+'/orders/assign',key,{
+              storeId:'different-store',externalOrderId:dispatchOrder.externalOrderId,courierId:target1
+            });
+            if(crossStore.response.status!==404) throw new Error('cross-store assignment succeeded');
 
             const deniedComplete = await complete('wrong-key');
             if (deniedComplete.response.status !== 401) {
