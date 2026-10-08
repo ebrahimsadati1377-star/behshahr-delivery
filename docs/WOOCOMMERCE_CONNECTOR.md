@@ -175,3 +175,12 @@ The plugin shows the assigned courier name in a WooCommerce orders-list column a
 ### WordPress deployment
 
 Copy the entire updated `integrations/wordpress/behshahr-delivery-connector` directory into the installed WordPress plugin directory, preserving the existing plugin settings. The new `includes/` PHP file and `assets/` JS file are required. The Delivery API code must be deployed **before** the updated WordPress plugin, or the new assignment controls will fail with a 404. No new database migration is required for this change.
+
+
+## Assigning several orders to one courier (pilot)
+
+A courier may have **up to five** active jobs at once, counted across ASSIGNED and PICKED_UP orders. The limit is enforced transactionally on the API even for simultaneous requests. While BUSY, the courier remains eligible for manually assigned WooCommerce/Admin orders if the vehicle matches and a slot remains. OFFLINE and SUSPENDED couriers cannot be assigned jobs. The last completed/rejected/reassigned job returns the courier to AVAILABLE; completing an earlier job does not.
+
+The WordPress courier dropdown and Admin dashboard show active jobs as `n/5`. In the courier PWA, `GET /api/courier/orders/active` lists **all** assigned jobs, allowing each to be picked up and delivered independently. The previous single-job `/orders/current` endpoint remains for older clients.
+
+**Route planning:** this delivers multi-order assignment, not optimized multi-stop routing. Each order still has its own pickup and drop-off directions; dispatchers should group geographically compatible orders. Dispatch capacity does not guarantee a 30-minute ETA.
