@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
+import { releaseCourierIfIdle } from './courier-capacity';
 import { UpdateCourierAvailabilityDto } from './dto/update-availability.dto';
 import { UpdateCourierLocationDto } from './dto/update-location.dto';
 
@@ -85,17 +86,22 @@ export class CouriersService {
     return orders.map((order) => this.serializeOrder(order));
   }
 
-  async currentOrder(userId: string) {
+  async activeOrders(userId: string) {
     const courier = await this.getCourierByUserId(userId);
-    const order = await this.prisma.order.findFirst({
+    const orders = await this.prisma.order.findMany({
       where: {
         courierId: courier.id,
         status: { in: ['ASSIGNED', 'PICKED_UP'] },
       },
-      orderBy: { assignedAt: 'desc' },
+      orderBy: [{ assignedAt: 'asc' }, { createdAt: 'asc' }],
     });
+    return orders.map((order) => this.serializeOrder(order));
+  }
 
-    return order ? this.serializeOrder(order) : null;
+  // Backward compatibility for clients that understand only one active mission.
+  async currentOrder(userId: string) {
+    const orders = await this.activeOrders(userId);
+    return orders[0] ?? null;
   }
 
   async acceptOrder(userId: string, orderId: string) {
@@ -177,10 +183,7 @@ export class CouriersService {
         throw new ConflictException('Only an assigned order can be rejected');
       }
 
-      await tx.courier.updateMany({
-        where: { id: courier.id, status: 'BUSY' },
-        data: { status: 'AVAILABLE' },
-      });
+      await releaseCourierIfIdle(tx, courier.id);
 
       await tx.orderEvent.create({
         data: {
@@ -270,10 +273,7 @@ export class CouriersService {
         throw new ConflictException('Order state changed; reload and try again');
       }
 
-      await tx.courier.update({
-        where: { id: courier.id },
-        data: { status: 'AVAILABLE' },
-      });
+      await releaseCourierIfIdle(tx, courier.id);
 
       await tx.orderEvent.create({
         data: {
