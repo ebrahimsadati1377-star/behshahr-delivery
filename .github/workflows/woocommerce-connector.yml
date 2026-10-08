@@ -254,7 +254,7 @@ jobs:
               headers:{'x-delivery-key':key}
             })).json();
             if(currentStatus.status!=='ASSIGNED' || currentStatus.courierId!==target2) throw new Error('assignment GET inconsistent');
-            const couriersAfter=(await (await fetch(baseUrl+'/couriers',{headers:{'x-delivery-key':key}})).json());
+            const couriersAfter=await (await fetch(baseUrl+'/couriers',{headers:{'x-delivery-key':key}})).json();
             if(couriersAfter.find(c=>c.id===target1)?.status!=='AVAILABLE'
               || couriersAfter.find(c=>c.id===target2)?.status!=='BUSY') throw new Error('courier statuses incorrect');
 
@@ -266,7 +266,7 @@ jobs:
             const verified=await (await fetch('http://127.0.0.1:4000/api/auth/verify-otp',{
               method:'POST',headers:{'content-type':'application/json'},
               body:JSON.stringify({phone:loginPhone,code:'123456'})
-            })).json());
+            })).json();
             if(!verified.accessToken) throw new Error('courier OTP login failed');
             const current=await (await fetch('http://127.0.0.1:4000/api/courier/orders/current',{
               headers:{authorization:'Bearer '+verified.accessToken}
