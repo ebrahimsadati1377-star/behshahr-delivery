@@ -129,7 +129,7 @@ final class BHD_Woo_Delivery_Connector {
     }
 
     public static function async_sync_completed($order_id): void {
-        self::sync_completed_order((int)$order_id);
+        return;
     }
 
     private static function enqueue(int $order_id): void {
