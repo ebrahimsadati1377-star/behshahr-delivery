@@ -13,6 +13,8 @@ import { OrdersService } from '../../orders/orders.service';
 import { AddressSnapshot } from '../../quotes/quote.types';
 import { QuotesService } from '../../quotes/quotes.service';
 import { OrderRealtimeService } from '../../realtime/order-realtime.service';
+import { WooAssignCourierDto } from './dto/woo-assign-courier.dto';
+import { WooAssignmentLookupDto } from './dto/woo-assignment-lookup.dto';
 import { CreateWooCommerceOrderDto } from './dto/create-woocommerce-order.dto';
 import { UpdateWooCommerceOrderStatusDto } from './dto/update-woocommerce-order-status.dto';
 
@@ -157,6 +159,134 @@ export class WooCommerceIntegrationService {
       externalOrderId,
     );
     return { synced: true, alreadyCompleted: false, ...synced };
+  }
+
+
+  async availableCouriers(apiKey: string | undefined) {
+    this.assertApiKey(apiKey);
+    const couriers = await this.prisma.courier.findMany({
+      where: { user: { status: 'ACTIVE' } },
+      include: { user: { select: { phone: true } } },
+      orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
+    });
+    return couriers.map((courier) => ({
+      id: courier.id,
+      fullName: courier.fullName ?? '',
+      phone: courier.user.phone,
+      vehicleType: courier.vehicleType,
+      status: courier.status,
+    }));
+  }
+
+  async orderAssignment(apiKey: string | undefined, dto: WooAssignmentLookupDto) {
+    this.assertApiKey(apiKey);
+    const storeId = dto.storeId.trim();
+    const externalOrderId = dto.externalOrderId.trim();
+    const link = await this.prisma.externalOrderLink.findUnique({
+      where: { provider_storeId_externalOrderId: { provider: PROVIDER, storeId, externalOrderId } },
+      include: { order: { include: {
+        courier: { include: { user: { select: { phone: true } } } },
+      } } },
+    });
+    if (!link) return { linked: false };
+    const order = link.order;
+    return {
+      linked: true,
+      deliveryOrderId: order.id,
+      publicCode: order.publicCode,
+      vehicleType: order.vehicleType,
+      status: order.status,
+      courierId: order.courierId,
+      courierName: order.courier?.fullName || order.courier?.user.phone || null,
+    };
+  }
+
+  async assignCourier(apiKey: string | undefined, dto: WooAssignCourierDto) {
+    this.assertApiKey(apiKey);
+    const storeId = dto.storeId.trim();
+    const externalOrderId = dto.externalOrderId.trim();
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const link = await tx.externalOrderLink.findUnique({
+        where: { provider_storeId_externalOrderId: { provider: PROVIDER, storeId, externalOrderId } },
+        include: { order: true },
+      });
+      if (!link) throw new NotFoundException('WooCommerce order has not been imported to Delivery');
+
+      const order = link.order;
+      if (order.courierId === dto.courierId && order.status === 'ASSIGNED') {
+        return { orderId: order.id, publicCode: order.publicCode, status: order.status, courierId: order.courierId, unchanged: true };
+      }
+      if (!['REQUESTED', 'ASSIGNED'].includes(order.status)) {
+        throw new ConflictException('Only REQUESTED or ASSIGNED orders can be dispatched');
+      }
+
+      const courier = await tx.courier.findUnique({
+        where: { id: dto.courierId },
+        include: { user: { select: { status: true } } },
+      });
+      if (!courier || courier.user.status !== 'ACTIVE') {
+        throw new NotFoundException('Active courier not found');
+      }
+      if (courier.vehicleType !== order.vehicleType) {
+        throw new ConflictException('Courier vehicle type does not match order');
+      }
+
+      const claimed = await tx.courier.updateMany({
+        where: { id: courier.id, status: 'AVAILABLE' },
+        data: { status: 'BUSY' },
+      });
+      if (claimed.count !== 1) {
+        throw new ConflictException('Courier is not available');
+      }
+
+      const where = order.status === 'REQUESTED'
+        ? { id: order.id, status: 'REQUESTED' as const, courierId: null }
+        : { id: order.id, status: 'ASSIGNED' as const, courierId: order.courierId };
+
+      const moved = await tx.order.updateMany({
+        where,
+        data: { status: 'ASSIGNED', courierId: courier.id, assignedAt: new Date() },
+      });
+      if (moved.count !== 1) {
+        throw new ConflictException('Order state changed during assignment');
+      }
+
+      if (order.status === 'ASSIGNED' && order.courierId) {
+        await tx.courier.updateMany({
+          where: { id: order.courierId, status: 'BUSY' },
+          data: { status: 'AVAILABLE' },
+        });
+      }
+
+      await tx.orderEvent.create({
+        data: {
+          orderId: order.id,
+          actorType: 'SYSTEM',
+          eventType: order.status === 'ASSIGNED' ? 'ORDER_REASSIGNED_FROM_WOOCOMMERCE' : 'ORDER_ASSIGNED_FROM_WOOCOMMERCE',
+          fromStatus: order.status,
+          toStatus: 'ASSIGNED',
+          metadata: {
+            provider: PROVIDER,
+            storeId,
+            externalOrderId,
+            previousCourierId: order.courierId,
+            courierId: courier.id,
+          },
+        },
+      });
+
+      return {
+        orderId: order.id,
+        publicCode: order.publicCode,
+        status: 'ASSIGNED',
+        courierId: courier.id,
+        unchanged: false,
+      };
+    });
+
+    if (!result.unchanged) this.realtime.publish(result.orderId, 'ORDER_STATUS');
+    return result;
   }
 
   private async ensureStoreCustomer(storeId: string) {
