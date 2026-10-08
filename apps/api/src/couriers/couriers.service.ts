@@ -74,6 +74,9 @@ export class CouriersService {
         status: 'REQUESTED',
         courierId: null,
         vehicleType: courier.vehicleType,
+        // Imported WooCommerce orders require explicit management assignment.
+        // Do not expose unassigned customer details to every online courier.
+        externalLink: { is: null },
       },
       orderBy: { createdAt: 'asc' },
       take: 30,
@@ -122,6 +125,8 @@ export class CouriersService {
           status: 'REQUESTED',
           courierId: null,
           vehicleType: courier.vehicleType,
+          // Server-side guard also blocks stale/direct accept requests.
+          externalLink: { is: null },
         },
         data: {
           courierId: courier.id,
