@@ -273,6 +273,48 @@ jobs:
             })).json();
             if(current?.id!==importDispatch.data.order.id) throw new Error('assigned Woo order not visible in courier panel');
 
+
+            const activeUrl='http://127.0.0.1:4000/api/courier/orders/active';
+            const courierHeaders={authorization:'Bearer '+verified.accessToken};
+            const multiOrders=[importDispatch.data.order.id];
+            for (let index=0; index<4; index++) {
+              const externalOrderId='batch-'+index;
+              const newOrder=await send(key,{...payload,externalOrderId,metadata:{orderNumber:externalOrderId}});
+              if(!newOrder.response.ok) throw new Error('batch import failed');
+              const assignedBatch=await post(baseUrl+'/orders/assign',key,{
+                storeId:payload.storeId,externalOrderId,courierId:target2
+              });
+              if(!assignedBatch.response.ok || assignedBatch.data.status!=='ASSIGNED') throw new Error('busy courier could not receive another order');
+              multiOrders.push(newOrder.data.order.id);
+            }
+            const activeResponse=await fetch(activeUrl,{headers:courierHeaders});
+            const activeJobs=await activeResponse.json();
+            if(!activeResponse.ok||activeJobs.length!==5||
+                multiOrders.some(id=>!activeJobs.some(job=>job.id===id))) throw new Error('courier did not receive all five jobs');
+            const couriersFull=await (await fetch(baseUrl+'/couriers',{headers:{'x-delivery-key':key}})).json();
+            if(couriersFull.find(c=>c.id===target2)?.activeOrders!==5) throw new Error('capacity counter incorrect');
+            const overflow=await send(key,{...payload,externalOrderId:'batch-overflow'});
+            const deniedOverflow=await post(baseUrl+'/orders/assign',key,{
+              storeId:payload.storeId,externalOrderId:'batch-overflow',courierId:target2
+            });
+            if(deniedOverflow.response.status!==409) throw new Error('sixth assignment was accepted');
+            const afterOverflow=await fetch(activeUrl,{headers:courierHeaders});
+            if((await afterOverflow.json()).length!==5) throw new Error('rejected overflow changed assignments');
+
+            for(let index=0; index<multiOrders.length; index++){
+              const oid=multiOrders[index];
+              const picked=await fetch('http://127.0.0.1:4000/api/courier/orders/'+oid+'/picked-up',{method:'POST',headers:courierHeaders});
+              if(!picked.ok) throw new Error('batch pickup failed '+oid);
+              const delivered=await fetch('http://127.0.0.1:4000/api/courier/orders/'+oid+'/delivered',{method:'POST',headers:courierHeaders});
+              if(!delivered.ok) throw new Error('batch delivery failed '+oid);
+              const courierProfile=await (await fetch('http://127.0.0.1:4000/api/courier/profile',{headers:courierHeaders})).json();
+              if(courierProfile.status!==(index===multiOrders.length-1?'AVAILABLE':'BUSY')) {
+                throw new Error('courier freed too early or remained busy after last job');
+              }
+            }
+            const afterDeliveries=await (await fetch(activeUrl,{headers:courierHeaders})).json();
+            if(afterDeliveries.length!==0) throw new Error('completed jobs left in active batch');
+
             const deniedAssign=await post(baseUrl+'/orders/assign','wrong-key',{
               storeId:dispatchOrder.storeId,externalOrderId:dispatchOrder.externalOrderId,courierId:target1
             });
