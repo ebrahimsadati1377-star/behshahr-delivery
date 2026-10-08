@@ -30,10 +30,10 @@
       notice.textContent=text;
       notice.style.color=error ? '#b32d2e' : '#167147';
     }
-    function load() {
+    function load(preserveMessage) {
       select.disabled=true; submit.disabled=true;
       status.textContent='در حال دریافت وضعیت رانندگان…';
-      setNotice('',false);
+      if (!preserveMessage) setNotice('',false);
       request('bhd_delivery_couriers',id,nonce).then(function(data) {
         var assignment=data.assignment || {linked:false};
         var linked=Boolean(assignment.linked);
@@ -79,7 +79,7 @@
       loading=true; select.disabled=true; submit.disabled=true;
       setNotice('در حال ارسال سفارش و تخصیص راننده…',false);
       request('bhd_delivery_assign_courier',id,nonce,select.value)
-        .then(function(data) { setNotice(data.message||'تخصیص موفق',false); load(); })
+        .then(function(data) { setNotice(data.message||'تخصیص موفق',false); load(true); })
         .catch(function(e) { setNotice(e.message||'تخصیص ناموفق بود.',true); })
         .finally(function() {loading=false;});
     });
