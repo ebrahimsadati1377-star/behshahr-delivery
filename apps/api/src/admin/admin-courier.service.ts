@@ -106,8 +106,8 @@ export class AdminCourierService {
       const activeCount = await this.prisma.order.count({
         where: { courierId: id, status: { in: ['ASSIGNED', 'PICKED_UP'] } },
       });
-      if (courier.status === 'BUSY' || activeCount > 0) {
-        throw new ConflictException('Cannot change vehicle during an active mission');
+      if (!['OFFLINE', 'SUSPENDED'].includes(courier.status) || activeCount > 0) {
+        throw new ConflictException('Courier must be offline and have no active mission to change vehicle');
       }
     }
 
@@ -118,7 +118,7 @@ export class AdminCourierService {
         }
         if (vehicleChanging) {
           const changed = await tx.courier.updateMany({
-            where: { id, status: { not: 'BUSY' } },
+            where: { id, status: { in: ['OFFLINE', 'SUSPENDED'] } },
             data: { vehicleType: dto.vehicleType, fullName },
           });
           if (changed.count !== 1) throw new ConflictException('Courier started a mission; retry later');

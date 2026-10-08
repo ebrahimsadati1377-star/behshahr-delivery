@@ -144,4 +144,39 @@ jobs:
           if (reassigned.courierId !== '00000000-0000-4000-8000-000000000331') throw new Error('admin web reassign failed');
           const detail = (await json(`${web}/api/admin/orders/${order.id}`, { headers:webHeaders })).body;
           if (!Array.isArray(detail.events) || !detail.events.some(e => e.eventType === 'ORDER_REASSIGNED_BY_ADMIN')) throw new Error('admin timeline missing reassign event');
+          
+          // Courier management integration coverage through the authenticated admin BFF.
+          await json(`${web}/api/admin/couriers`, { headers:{ authorization:`Bearer ${customer.accessToken}` } }, 401);
+          await json(`${api}/admin/couriers`, { headers:auth }, 403);
+          await json(`${web}/api/admin/couriers/00000000-0000-4000-8000-000000000331/suspend`,
+            { method:'POST', headers:webHeaders }, 409); // active mission
+
+          const newCourier = (await json(`${web}/api/admin/couriers`, {
+            method:'POST', headers:webHeaders,
+            body:JSON.stringify({ fullName:'Test Courier', phone:'09111234567', vehicleType:'MOTORBIKE' }),
+          })).body;
+          if (!newCourier.id || newCourier.phone !== '+989111234567' || newCourier.status !== 'OFFLINE') throw new Error('courier create failed');
+          await json(`${web}/api/admin/couriers`, {
+            method:'POST', headers:webHeaders,
+            body:JSON.stringify({ fullName:'Duplicate', phone:'09111234567', vehicleType:'CAR' }),
+          }, 409);
+          await json(`${web}/api/admin/couriers`, {
+            method:'POST', headers:webHeaders,
+            body:JSON.stringify({ fullName:'Invalid', phone:'091', vehicleType:'CAR' }),
+          }, 400);
+          const changed = (await json(`${web}/api/admin/couriers/${newCourier.id}`, {
+            method:'PATCH', headers:webHeaders,
+            body:JSON.stringify({ fullName:'Test Courier Edited', vehicleType:'CAR' }),
+          })).body;
+          if (changed.fullName !== 'Test Courier Edited' || changed.vehicleType !== 'CAR') throw new Error('courier edit failed');
+          const listed = (await json(`${web}/api/admin/couriers`, { headers:webHeaders })).body;
+          if (listed.length !== 3 || listed.find(item => item.id === newCourier.id)?.fullName !== 'Test Courier Edited') throw new Error('courier list missing new profile');
+          const suspended = (await json(`${web}/api/admin/couriers/${newCourier.id}/suspend`,
+            { method:'POST', headers:webHeaders })).body;
+          if (suspended.status !== 'SUSPENDED') throw new Error('courier suspension failed');
+          const activated = (await json(`${web}/api/admin/couriers/${newCourier.id}/activate`,
+            { method:'POST', headers:webHeaders })).body;
+          if (activated.status !== 'OFFLINE') throw new Error('courier activation failed');
+          const page = await fetch(`${web}/couriers`);
+          if (!page.ok) throw new Error('Courier admin page not available');
           NODE
