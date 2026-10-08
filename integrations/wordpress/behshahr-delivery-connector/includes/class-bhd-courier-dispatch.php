@@ -205,7 +205,7 @@ final class BHD_Woo_Courier_Dispatch {
         if (!preg_match('/^[a-f0-9-]{36}$/i', $courier_id)) {
             wp_send_json_error(['message' => 'راننده معتبر انتخاب نشده است.'], 400);
         }
-        if (in_array($order->get_status(), ['cancelled', 'refunded', 'failed', 'completed'], true)) {
+        if (in_array($order->get_status(), ['cancelled', 'refunded', 'failed'], true)) {
             wp_send_json_error(['message' => 'سفارش بسته یا لغو شده قابل تخصیص نیست.'], 409);
         }
 

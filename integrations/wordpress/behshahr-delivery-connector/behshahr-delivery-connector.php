@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Behshahr Delivery Connector
  * Description: Sends WooCommerce orders to the Behshahr Delivery dispatcher.
- * Version: 0.3.0
+ * Version: 0.3.1
  * Requires Plugins: woocommerce
  * Author: Behshahr Delivery
  */
@@ -110,9 +110,7 @@ final class BHD_Woo_Delivery_Connector {
             self::enqueue((int)$order_id);
         }
 
-        if (in_array($to, ['completed', 'approved'], true) && $order instanceof WC_Order && $order->get_meta(self::META_ORDER_ID, true)) {
-            self::enqueue_completed_sync((int)$order_id);
-        }
+        // Upstream completed/approved must not close a courier mission.
     }
 
     public static function order_actions(array $actions): array {
@@ -131,7 +129,7 @@ final class BHD_Woo_Delivery_Connector {
     }
 
     public static function async_sync_completed($order_id): void {
-        self::sync_completed_order((int)$order_id);
+        return;
     }
 
     private static function enqueue(int $order_id): void {
