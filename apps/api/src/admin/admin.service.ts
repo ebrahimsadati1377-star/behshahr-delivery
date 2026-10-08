@@ -1,5 +1,6 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
+import { reserveCourierSlot, releaseCourierIfIdle } from '../couriers/courier-capacity';
 import { Prisma } from '../generated/prisma/client';
 import { AssignOrderDto } from './dto/assign-order.dto';
 
@@ -117,13 +118,7 @@ export class AdminService {
         throw new ConflictException('Courier vehicle type does not match order');
       }
 
-      const claimedCourier = await tx.courier.updateMany({
-        where: { id: courier.id, status: 'AVAILABLE' },
-        data: { status: 'BUSY' },
-      });
-      if (claimedCourier.count !== 1) {
-        throw new ConflictException('Courier is not available');
-      }
+      await reserveCourierSlot(tx, courier.id);
 
       const assignedAt = new Date();
       const assignedOrder = await tx.order.updateMany({
@@ -167,13 +162,7 @@ export class AdminService {
         throw new ConflictException('Courier vehicle type does not match order');
       }
 
-      const claimedTarget = await tx.courier.updateMany({
-        where: { id: target.id, status: 'AVAILABLE' },
-        data: { status: 'BUSY' },
-      });
-      if (claimedTarget.count !== 1) {
-        throw new ConflictException('Target courier is not available');
-      }
+      await reserveCourierSlot(tx, target.id);
 
       const previousCourierId = order.courierId;
       const movedOrder = await tx.order.updateMany({
@@ -188,10 +177,7 @@ export class AdminService {
         throw new ConflictException('Order state changed; reload and try again');
       }
 
-      await tx.courier.updateMany({
-        where: { id: previousCourierId, status: 'BUSY' },
-        data: { status: 'AVAILABLE' },
-      });
+      await releaseCourierIfIdle(tx, previousCourierId);
 
       await tx.orderEvent.create({
         data: {
