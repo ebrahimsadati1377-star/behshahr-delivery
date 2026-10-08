@@ -11,8 +11,8 @@ The connector supports order import, manual courier assignment from WooCommerce 
 3. Delivery validates the service area, calculates route/pricing, and creates a `REQUESTED` delivery order.
 4. The dispatcher assigns a courier as usual.
 5. The connector stores the Delivery order ID/public code in WooCommerce order meta.
-6. When the linked WooCommerce order becomes `completed`, the connector sends a status update to Delivery.
-7. Delivery idempotently changes the linked active order to `DELIVERED`; if a courier is attached, that courier is returned to `AVAILABLE`.
+6. WooCommerce `completed` / `approved` does not confirm courier delivery.
+7. Delivery marks the order `DELIVERED` only after courier confirmation. Legacy status-sync calls are ignored until courier delivery.
 
 Delivery-to-WooCommerce callbacks remain intentionally deferred. This status synchronization flows from WooCommerce to Delivery.
 
