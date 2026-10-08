@@ -1,10 +1,13 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { AuthenticatedUser } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { OrderRealtimeService } from '../realtime/order-realtime.service';
+import { AdminCourierService } from './admin-courier.service';
+import { CreateCourierDto } from './dto/create-courier.dto';
+import { UpdateCourierDto } from './dto/update-courier.dto';
 import { AdminPaymentService } from './admin-payment.service';
 import { AdminPricingService } from './admin-pricing.service';
 import { AdminServiceZoneService } from './admin-service-zone.service';
@@ -20,6 +23,7 @@ import { MarkPaymentPaidDto } from './dto/mark-payment-paid.dto';
 export class AdminController {
   constructor(
     private readonly admin: AdminService,
+    private readonly courierManagement: AdminCourierService,
     private readonly payments: AdminPaymentService,
     private readonly pricing: AdminPricingService,
     private readonly serviceZones: AdminServiceZoneService,
@@ -38,7 +42,31 @@ export class AdminController {
 
   @Get('couriers')
   couriers() {
-    return this.admin.couriers();
+    return this.courierManagement.list();
+  }
+
+  @Post('couriers')
+  createCourier(@CurrentUser() admin: AuthenticatedUser, @Body() dto: CreateCourierDto) {
+    return this.courierManagement.create(admin.id, dto);
+  }
+
+  @Patch('couriers/:id')
+  updateCourier(
+    @CurrentUser() admin: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() dto: UpdateCourierDto,
+  ) {
+    return this.courierManagement.update(admin.id, id, dto);
+  }
+
+  @Post('couriers/:id/suspend')
+  suspendCourier(@CurrentUser() admin: AuthenticatedUser, @Param('id') id: string) {
+    return this.courierManagement.suspend(admin.id, id);
+  }
+
+  @Post('couriers/:id/activate')
+  activateCourier(@CurrentUser() admin: AuthenticatedUser, @Param('id') id: string) {
+    return this.courierManagement.activate(admin.id, id);
   }
 
   @Get('pricing-rules')

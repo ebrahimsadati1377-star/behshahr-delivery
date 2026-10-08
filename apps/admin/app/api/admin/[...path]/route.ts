@@ -4,7 +4,7 @@ import { backendFetch } from '../../../../lib/backend';
 import { ACCESS_COOKIE, REFRESH_COOKIE, SessionPayload, clearSessionCookies, setSessionCookies } from '../../../../lib/session';
 
 const allowedRoots = new Set(['orders', 'couriers', 'pricing-rules', 'service-zones']);
-const allowedMethods = new Set(['GET', 'POST']);
+const allowedMethods = new Set(['GET', 'POST', 'PATCH']);
 
 function upstreamPath(parts: string[]) {
   if (!parts.length || !allowedRoots.has(parts[0]) || parts.some(part => !/^[a-zA-Z0-9_-]+$/.test(part))) return null;
@@ -49,3 +49,4 @@ async function handler(request: NextRequest, context: { params: Promise<{ path: 
 
 export const GET = handler;
 export const POST = handler;
+export const PATCH = handler;

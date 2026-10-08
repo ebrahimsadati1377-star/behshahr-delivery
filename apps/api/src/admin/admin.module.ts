@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AdminCourierService } from './admin-courier.service';
 import { AdminPaymentService } from './admin-payment.service';
 import { AdminPricingService } from './admin-pricing.service';
 import { AdminServiceZoneService } from './admin-service-zone.service';
@@ -9,6 +10,7 @@ import { AdminService } from './admin.service';
   controllers: [AdminController],
   providers: [
     AdminService,
+    AdminCourierService,
     AdminPaymentService,
     AdminPricingService,
     AdminServiceZoneService,
