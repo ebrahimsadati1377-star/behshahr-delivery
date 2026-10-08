@@ -37,9 +37,9 @@ export class CouriersController {
     @Body() dto: UpdateCourierLocationDto,
   ) {
     const result = await this.couriers.updateLocation(user.id, dto);
-    const activeOrder = await this.couriers.currentOrder(user.id);
-    if (activeOrder) {
-      this.realtime.publish(activeOrder.id, 'COURIER_LOCATION');
+    const activeOrders = await this.couriers.activeOrders(user.id);
+    for (const order of activeOrders) {
+      this.realtime.publish(order.id, 'COURIER_LOCATION');
     }
     return result;
   }
@@ -47,6 +47,11 @@ export class CouriersController {
   @Get('orders/available')
   availableOrders(@CurrentUser() user: AuthenticatedUser) {
     return this.couriers.availableOrders(user.id);
+  }
+
+  @Get('orders/active')
+  activeOrders(@CurrentUser() user: AuthenticatedUser) {
+    return this.couriers.activeOrders(user.id);
   }
 
   @Get('orders/current')
