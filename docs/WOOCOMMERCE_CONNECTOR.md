@@ -4,7 +4,7 @@ This integration sends WooCommerce orders into Behshahr Delivery without exposin
 
 ## Scope
 
-The connector supports order import, manual courier assignment from WooCommerce admin, and WooCommerce `completed` status synchronization:
+The connector supports order import and manual courier assignment from WooCommerce admin:
 
 1. WooCommerce reaches a configured order status (default `processing`).
 2. The WordPress connector sends the order to Delivery.
@@ -14,7 +14,7 @@ The connector supports order import, manual courier assignment from WooCommerce 
 6. WooCommerce `completed` / `approved` does not confirm courier delivery.
 7. Delivery marks the order `DELIVERED` only after courier confirmation. Legacy status-sync calls are ignored until courier delivery.
 
-Delivery-to-WooCommerce callbacks remain intentionally deferred. This status synchronization flows from WooCommerce to Delivery.
+Delivery-to-WooCommerce callbacks remain intentionally deferred. WooCommerce order completion and courier delivery completion are separate workflows.
 
 ## Security
 
@@ -127,7 +127,7 @@ Required settings:
 - pickup address and coordinates
 - WooCommerce order meta keys containing customer latitude/longitude
 
-The connector also checks several common latitude/longitude meta names automatically. Version `0.2.0` additionally watches linked orders for the WooCommerce `completed` transition and asynchronously posts the status to Delivery.
+The connector also checks several common latitude/longitude meta names automatically. Version `0.3.1` no longer automatically queues WooCommerce completion callbacks; previously queued callbacks are discarded by the plugin.
 
 ## Coordinate requirement
 
