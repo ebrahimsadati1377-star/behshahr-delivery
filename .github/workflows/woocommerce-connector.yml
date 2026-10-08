@@ -270,7 +270,7 @@ jobs:
             if(!verified.accessToken) throw new Error('courier OTP login failed');
             const current=await (await fetch('http://127.0.0.1:4000/api/courier/orders/current',{
               headers:{authorization:'Bearer '+verified.accessToken}
-            })).json());
+            })).json();
             if(current?.id!==importDispatch.data.order.id) throw new Error('assigned Woo order not visible in courier panel');
 
             const deniedAssign=await post(baseUrl+'/orders/assign','wrong-key',{
