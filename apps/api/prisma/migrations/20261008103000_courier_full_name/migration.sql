@@ -1,0 +1,1 @@
+ALTER TABLE "couriers" ADD COLUMN "full_name" VARCHAR(100);

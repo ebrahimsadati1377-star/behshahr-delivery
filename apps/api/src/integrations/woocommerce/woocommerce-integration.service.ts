@@ -115,7 +115,7 @@ export class WooCommerceIntegrationService {
       };
     }
 
-    const cancelledAt = new Date();
+    const deliveredAt = new Date();
     await this.prisma.$transaction(async (tx) => {
       const updated = await tx.order.updateMany({
         where: {
@@ -123,8 +123,9 @@ export class WooCommerceIntegrationService {
           status: 'REQUESTED',
         },
         data: {
-          status: 'CANCELLED',
-          cancelledAt,
+          status: 'DELIVERED',
+          deliveredAt,
+          finalPrice: link.order.quotedPrice,
         },
       });
 
@@ -136,9 +137,9 @@ export class WooCommerceIntegrationService {
         data: {
           orderId: link.order.id,
           actorType: 'SYSTEM',
-          eventType: 'ORDER_CANCELLED_FROM_WOOCOMMERCE',
+          eventType: 'ORDER_DELIVERED_FROM_WOOCOMMERCE',
           fromStatus: link.order.status,
-          toStatus: 'CANCELLED',
+          toStatus: 'DELIVERED',
           metadata: {
             provider: PROVIDER,
             storeId,
