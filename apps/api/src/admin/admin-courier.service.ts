@@ -1,5 +1,6 @@
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../database/prisma.service';
+import { COURIER_ACTIVE_ORDER_LIMIT } from '../couriers/courier-capacity';
 import { Prisma } from '../generated/prisma/client';
 import { CreateCourierDto } from './dto/create-courier.dto';
 import { UpdateCourierDto } from './dto/update-courier.dto';
@@ -24,7 +25,7 @@ export class AdminCourierService {
   constructor(private readonly prisma: PrismaService) {}
 
   async list() {
-    const [couriers, total, today] = await Promise.all([
+    const [couriers, total, today, active] = await Promise.all([
       this.prisma.courier.findMany({
         include: { user: { select: { phone: true, status: true } } },
         orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
@@ -41,10 +42,16 @@ export class AdminCourierService {
         _count: { _all: true },
         _sum: { finalPrice: true },
       }),
+      this.prisma.order.groupBy({
+        by: ['courierId'],
+        where: { courierId: { not: null }, status: { in: ['ASSIGNED', 'PICKED_UP'] } },
+        _count: { _all: true },
+      }),
     ]);
 
     const totals = new Map(total.map((row) => [row.courierId, row]));
     const todays = new Map(today.map((row) => [row.courierId, row]));
+    const actives = new Map(active.map((row) => [row.courierId, row._count._all]));
     return couriers.map((courier) => {
       const all = totals.get(courier.id);
       const day = todays.get(courier.id);
@@ -56,6 +63,8 @@ export class AdminCourierService {
         userStatus: courier.user.status,
         vehicleType: courier.vehicleType,
         status: courier.status,
+        activeOrders: actives.get(courier.id) ?? 0,
+        maxActiveOrders: COURIER_ACTIVE_ORDER_LIMIT,
         lastLatitude: courier.lastLatitude === null ? null : Number(courier.lastLatitude),
         lastLongitude: courier.lastLongitude === null ? null : Number(courier.lastLongitude),
         lastSeenAt: courier.lastSeenAt,

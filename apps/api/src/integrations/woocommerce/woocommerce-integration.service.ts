@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { PrismaService } from '../../database/prisma.service';
+import { reserveCourierSlot, releaseCourierIfIdle, COURIER_ACTIVE_ORDER_LIMIT } from '../../couriers/courier-capacity';
 import { Prisma } from '../../generated/prisma/client';
 import { OrdersService } from '../../orders/orders.service';
 import { AddressSnapshot } from '../../quotes/quote.types';
@@ -164,17 +165,27 @@ export class WooCommerceIntegrationService {
 
   async availableCouriers(apiKey: string | undefined) {
     this.assertApiKey(apiKey);
-    const couriers = await this.prisma.courier.findMany({
-      where: { user: { status: 'ACTIVE' } },
-      include: { user: { select: { phone: true } } },
-      orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
-    });
+    const [couriers, counts] = await Promise.all([
+      this.prisma.courier.findMany({
+        where: { user: { status: 'ACTIVE' } },
+        include: { user: { select: { phone: true } } },
+        orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
+      }),
+      this.prisma.order.groupBy({
+        by: ['courierId'],
+        where: { courierId: { not: null }, status: { in: ['ASSIGNED', 'PICKED_UP'] } },
+        _count: { _all: true },
+      }),
+    ]);
+    const activeCounts = new Map(counts.map((row) => [row.courierId, row._count._all]));
     return couriers.map((courier) => ({
       id: courier.id,
       fullName: courier.fullName ?? '',
       phone: courier.user.phone,
       vehicleType: courier.vehicleType,
       status: courier.status,
+      activeOrders: activeCounts.get(courier.id) ?? 0,
+      maxActiveOrders: COURIER_ACTIVE_ORDER_LIMIT,
     }));
   }
 
@@ -232,13 +243,7 @@ export class WooCommerceIntegrationService {
         throw new ConflictException('Courier vehicle type does not match order');
       }
 
-      const claimed = await tx.courier.updateMany({
-        where: { id: courier.id, status: 'AVAILABLE' },
-        data: { status: 'BUSY' },
-      });
-      if (claimed.count !== 1) {
-        throw new ConflictException('Courier is not available');
-      }
+      await reserveCourierSlot(tx, courier.id);
 
       const where = order.status === 'REQUESTED'
         ? { id: order.id, status: 'REQUESTED' as const, courierId: null }
@@ -253,10 +258,7 @@ export class WooCommerceIntegrationService {
       }
 
       if (order.status === 'ASSIGNED' && order.courierId) {
-        await tx.courier.updateMany({
-          where: { id: order.courierId, status: 'BUSY' },
-          data: { status: 'AVAILABLE' },
-        });
+        await releaseCourierIfIdle(tx, order.courierId);
       }
 
       await tx.orderEvent.create({

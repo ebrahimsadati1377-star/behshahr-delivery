@@ -110,7 +110,7 @@ final class BHD_Woo_Courier_Dispatch {
         echo '<p class="bhd-dispatch-status" role="status">در حال دریافت وضعیت ارسال…</p>';
         echo '<label style="display:block;margin:12px 0 6px" for="bhd-dispatch-select-' . esc_attr((string)$id) . '"><strong>راننده آماده</strong></label>';
         echo '<select class="bhd-dispatch-select" id="bhd-dispatch-select-' . esc_attr((string)$id) . '" style="width:100%" disabled><option>در حال بارگذاری…</option></select>';
-        echo '<p class="description">فقط راننده آنلاین، آزاد و با وسیله نقلیه مطابق سفارش قابل انتخاب است.</p>';
+        echo '<p class="description">راننده آنلاین و مشغول با ظرفیت خالی، تا ۵ سفارش همزمان و وسیله مطابق سفارش، قابل انتخاب است.</p>';
         echo '<button type="button" class="button button-primary bhd-dispatch-submit" style="width:100%;margin-top:9px" disabled>ارسال سفارش به راننده</button>';
         echo '<p class="bhd-dispatch-notice" role="alert" style="margin-top:9px"></p>';
         echo '<button type="button" class="button-link bhd-dispatch-refresh">بروزرسانی رانندگان</button>';

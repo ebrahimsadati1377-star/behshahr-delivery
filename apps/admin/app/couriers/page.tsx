@@ -14,6 +14,8 @@ type Courier = {
   phone: string;
   vehicleType: VehicleType;
   status: CourierStatus;
+  activeOrders: number;
+  maxActiveOrders: number;
   userStatus: 'ACTIVE' | 'SUSPENDED';
   lastLatitude: number | null;
   lastLongitude: number | null;
@@ -223,7 +225,7 @@ export default function CouriersPage() {
             <div className={styles.driverInfo}>
               <strong>{courier.fullName || 'نام ثبت‌نشده'}</strong>
               <span dir="ltr">{courier.phone}</span>
-              <small>{courier.vehicleType === 'MOTORBIKE' ? 'موتورسیکلت' : 'خودرو'} • {toman(courier.todayDeliveries)} تحویل امروز</small>
+              <small>{courier.vehicleType === 'MOTORBIKE' ? 'موتورسیکلت' : 'خودرو'} • {courier.activeOrders}/{courier.maxActiveOrders} مأموریت باز • {toman(courier.todayDeliveries)} تحویل امروز</small>
             </div>
             <span className={styles.badge} data-status={courier.status}>{statusLabels[courier.status]}</span>
             <div className={styles.rowButtons}>

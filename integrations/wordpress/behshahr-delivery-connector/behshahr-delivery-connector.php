@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Behshahr Delivery Connector
  * Description: Sends WooCommerce orders to the Behshahr Delivery dispatcher.
- * Version: 0.3.1
+ * Version: 0.4.0
  * Requires Plugins: woocommerce
  * Author: Behshahr Delivery
  */

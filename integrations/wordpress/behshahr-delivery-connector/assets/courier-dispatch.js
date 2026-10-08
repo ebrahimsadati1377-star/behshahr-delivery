@@ -43,16 +43,19 @@
           : 'سفارش هنوز در سامانه ارسال ثبت نشده؛ هنگام تخصیص ثبت می‌شود.';
         select.replaceChildren();
         var opt=document.createElement('option');
-        opt.value=''; opt.textContent='انتخاب راننده آماده';
+        opt.value=''; opt.textContent='انتخاب راننده (ظرفیت تا ۵ سفارش)';
         select.appendChild(opt);
         var eligible=0;
         (data.couriers||[]).forEach(function(c) {
           if (c.vehicleType !== data.vehicleType) return;
           var option=document.createElement('option');
           option.value=c.id;
+          var active=c.activeOrders||0, max=c.maxActiveOrders||5;
+          var eligibleCourier=(c.status==='AVAILABLE'||c.status==='BUSY')&&active<max;
           option.textContent=(c.fullName||c.phone)+' ('+(c.vehicleType==='CAR'?'خودرو':'موتور')+') • '+
-            (c.status==='AVAILABLE'?'آماده':c.status==='BUSY'?'مشغول':c.status==='OFFLINE'?'آفلاین':'تعلیق');
-          option.disabled=c.status!=='AVAILABLE';
+            (c.status==='AVAILABLE'?'آماده':c.status==='BUSY'?'مشغول':c.status==='OFFLINE'?'آفلاین':'تعلیق')+
+            ' • '+active+'/'+max+' سفارش';
+          option.disabled=!eligibleCourier;
           if (!option.disabled) eligible++;
           select.appendChild(option);
         });
@@ -60,7 +63,7 @@
         if (!allowed) {
           setNotice('این سفارش در وضعیت فعلی قابل تخصیص یا جابه‌جایی نیست.',true);
         } else if (!eligible) {
-          setNotice('راننده آماده با وسیله موردنیاز وجود ندارد.',true);
+          setNotice('راننده فعال با ظرفیت خالی برای این وسیله وجود ندارد.',true);
         }
         select.disabled=!allowed || !eligible;
         submit.textContent=linked && assignment.status==='ASSIGNED'

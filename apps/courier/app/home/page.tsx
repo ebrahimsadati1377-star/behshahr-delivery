@@ -161,7 +161,7 @@ function OrderCard({
 export default function CourierHomePage() {
   const router = useRouter();
   const [profile, setProfile] = useState<CourierProfile | null>(null);
-  const [current, setCurrent] = useState<CourierOrder | null>(null);
+  const [activeOrders, setActiveOrders] = useState<CourierOrder[]>([]);
   const [queue, setQueue] = useState<CourierOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionBusy, setActionBusy] = useState(false);
@@ -183,9 +183,9 @@ export default function CourierHomePage() {
   const load = useCallback(async () => {
     const nextProfile = await api('profile') as CourierProfile;
     setProfile(nextProfile);
-    const nextCurrent = await api('orders/current') as CourierOrder | null;
-    setCurrent(nextCurrent);
-    if (nextProfile.status === 'AVAILABLE' && !nextCurrent) {
+    const nextActive = await api('orders/active') as CourierOrder[];
+    setActiveOrders(nextActive);
+    if (nextProfile.status === 'AVAILABLE' && nextActive.length === 0) {
       const nextQueue = await api('orders/available') as CourierOrder[];
       setQueue(nextQueue);
     } else {
@@ -316,15 +316,21 @@ export default function CourierHomePage() {
         </button>
       </section>
 
-      {current ? <section className="section current-section">
+      {activeOrders.length > 0 ? <section className="section current-section">
         <div className="section-head">
-          <div><span className="eyebrow">مأموریت جاری</span><h2>سفارش فعال</h2></div>
+          <div><span className="eyebrow">مأموریت‌های تخصیص‌یافته</span>
+            <h2>{activeOrders.length.toLocaleString('fa-IR')} سفارش در مسیر</h2></div>
           <span className="live-chip"><i />زنده</span>
         </div>
-        <OrderCard order={current} action={orderAction} busy={actionBusy} current courierLocation={courierLocation} />
+        <p className="footer-note">برای هر سفارش جداگانه دریافت بسته و تحویل مقصد را ثبت کن. مسیرها مستقل هستند.</p>
+        <div className="order-list">{activeOrders.map((order, index) =>
+          <div key={order.id}>
+            <p className="footer-note">مأموریت {Number(index + 1).toLocaleString('fa-IR')} از {activeOrders.length.toLocaleString('fa-IR')}</p>
+            <OrderCard order={order} action={orderAction} busy={actionBusy} current={index === 0} courierLocation={courierLocation}/>
+          </div>)}</div>
       </section> : null}
 
-      {!current && profile?.status === 'AVAILABLE' ? <section className="section queue-section">
+      {activeOrders.length === 0 && profile?.status === 'AVAILABLE' ? <section className="section queue-section">
         <div className="section-head">
           <div><span className="eyebrow">صف سفارش‌ها</span><h2>آماده دریافت</h2></div>
           <span className="queue-count">{queue.length.toLocaleString('fa-IR')}</span>
@@ -332,7 +338,7 @@ export default function CourierHomePage() {
         {queue.length ? <div className="order-list">{queue.map((order) => <OrderCard key={order.id} order={order} action={orderAction} busy={actionBusy} />)}</div> : <div className="empty-state"><div className="empty-radar"><i /><i /><i /></div><strong>فعلاً سفارشی در صف نیست</strong><span>آنلاین بمان؛ با ثبت سفارش جدید این صفحه خودکار بروزرسانی می‌شود.</span></div>}
       </section> : null}
 
-      {!current && profile?.status === 'OFFLINE' ? <div className="empty-state offline-empty"><div className="empty-power">◉</div><strong>شیفتت هنوز شروع نشده</strong><span>برای مشاهده و قبول سفارش‌های اطراف، از کارت بالا آنلاین شو.</span></div> : null}
+      {activeOrders.length === 0 && profile?.status === 'OFFLINE' ? <div className="empty-state offline-empty"><div className="empty-power">◉</div><strong>شیفتت هنوز شروع نشده</strong><span>برای مشاهده و قبول سفارش‌های اطراف، از کارت بالا آنلاین شو.</span></div> : null}
       {profile?.status === 'SUSPENDED' ? <div className="empty-state suspended-empty"><strong>دسترسی به دریافت سفارش متوقف است</strong><span>برای بررسی وضعیت حساب با مدیریت ناوگان تماس بگیر.</span></div> : null}
 
       <p className="footer-note">ارسال موقعیت در نسخه فعلی فقط هنگام باز بودن PWA انجام می‌شود.</p>
