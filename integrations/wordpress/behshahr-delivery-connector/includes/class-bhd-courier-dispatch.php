@@ -82,7 +82,7 @@ final class BHD_Woo_Courier_Dispatch {
             'bhd-courier-dispatch',
             plugins_url('assets/courier-dispatch.js', dirname(__DIR__) . '/behshahr-delivery-connector.php'),
             [],
-            '0.3.0',
+            '0.4.0',
             true
         );
         wp_localize_script('bhd-courier-dispatch', 'BHDDeliveryDispatch', [
