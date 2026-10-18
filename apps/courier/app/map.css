@@ -8,7 +8,11 @@
   margin: 14px 0 16px;
 }
 
-.mission-map { background: #edf4f2; }
+.mission-map { background: #edf4f2; margin-bottom: 0; }
+.mission-map-wrapper { margin: 14px 0 16px; }
+.mission-map-wrapper .mission-map { margin: 0; }
+.mission-route-status { min-height: 25px; margin: 6px 1px 0; padding: 3px 8px; color: #41635e; font-size: 11px; text-align: right; line-height: 1.7; }
+@media (prefers-reduced-motion: reduce) { .mission-map * { transition: none !important; } }
 
 .mission-map-fallback {
   display: flex;
