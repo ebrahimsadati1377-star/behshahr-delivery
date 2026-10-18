@@ -126,6 +126,8 @@ function OrderCard({
 
       {current ? (
         <MissionMap
+          orderId={order.id}
+          status={order.status}
           pickup={order.pickupSnapshot}
           dropoff={order.dropoffSnapshot}
           courier={courierLocation ? { ...courierLocation, title: 'موقعیت من' } : null}
