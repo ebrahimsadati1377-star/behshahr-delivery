@@ -112,6 +112,7 @@ jobs:
           if command -v php >/dev/null 2>&1; then
             php -l integrations/wordpress/behshahr-delivery-connector/behshahr-delivery-connector.php
             php -l integrations/wordpress/behshahr-delivery-connector/includes/class-bhd-courier-dispatch.php
+            php integrations/wordpress/behshahr-delivery-connector/tests/manual-dispatch-settings-test.php
           else
             echo "php CLI not available on runner; skipping syntax check"
           fi

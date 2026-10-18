@@ -184,3 +184,15 @@ A courier may have **up to five** active jobs at once, counted across ASSIGNED a
 The WordPress courier dropdown and Admin dashboard show active jobs as `n/5`. In the courier PWA, `GET /api/courier/orders/active` lists **all** assigned jobs, allowing each to be picked up and delivered independently. The previous single-job `/orders/current` endpoint remains for older clients.
 
 **Route planning:** this delivers multi-order assignment, not optimized multi-stop routing. Each order still has its own pickup and drop-off directions; dispatchers should group geographically compatible orders. Dispatch capacity does not guarantee a 30-minute ETA.
+
+## Only manually selected and assigned orders in the courier app (plugin 0.4.1)
+
+Under **WooCommerce → Delivery Connector**, tick **«فقط سفارش‌های انتخاب‌شده و تخصیص‌داده‌شده به راننده نمایش داده شوند»** and save.
+
+- Checked: disables automatic WooCommerce order imports on status change. Background Action Scheduler or WP-Cron imports queued before the setting changed are also skipped when they execute.
+- The WooCommerce order editor's **«تخصیص راننده ارسال»** control remains functional: select an online courier with spare capacity and assign. It imports the selected order if needed and makes it visible only to that courier.
+- The manual **«ارسال به Behshahr Delivery»** WooCommerce order action remains available, but importing alone does *not* show the order to drivers without dispatch assignment.
+- Unchecked: follows the existing **«ارسال خودکار سفارش‌ها»** and order-status setting for importing orders. **The Delivery backend continues to require explicit dispatch of WooCommerce orders before any courier sees them**; unchecking does not make unassigned Woo orders public.
+- Existing imported or assigned orders are not deleted, canceled, or reassigned when toggling this setting. Orders already assigned stay visible to their own courier; other couriers cannot see them.
+
+This is an import/selection policy at the WordPress plugin level, layered on top of the server-side courier authorization. It does not modify the Delivery API, any database rows or the customer's WooCommerce order status.

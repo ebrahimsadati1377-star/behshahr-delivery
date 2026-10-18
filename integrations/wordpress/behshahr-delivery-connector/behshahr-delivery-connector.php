@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Behshahr Delivery Connector
  * Description: Sends WooCommerce orders to the Behshahr Delivery dispatcher.
- * Version: 0.4.0
+ * Version: 0.4.1
  * Requires Plugins: woocommerce
  * Author: Behshahr Delivery
  */
@@ -55,6 +55,7 @@ final class BHD_Woo_Delivery_Connector {
 
         return [
             'enabled' => empty($input['enabled']) ? '0' : '1',
+            'manual_dispatch_only' => empty($input['manual_dispatch_only']) ? '0' : '1',
             'api_url' => esc_url_raw((string)($input['api_url'] ?? '')),
             'api_key' => sanitize_text_field((string)($input['api_key'] ?? '')),
             'store_id' => sanitize_key((string)($input['store_id'] ?? 'dekan')),
@@ -77,11 +78,12 @@ final class BHD_Woo_Delivery_Connector {
         ?>
         <div class="wrap">
             <h1>Behshahr Delivery Connector</h1>
-            <p>سفارش ووکامرس را پس از رسیدن به وضعیت انتخابی به پنل دیسپچ ارسال می‌کند و وضعیت completed را با Delivery همگام می‌کند.</p>
+            <p>اتصال سفارش‌های ووکامرس به سامانه ارسال و تخصیص دستی راننده. وضعیت تکمیل‌شده ووکامرس به معنی تحویل سفارش توسط راننده نیست.</p>
             <form method="post" action="options.php">
                 <?php settings_fields('bhd_delivery_connector'); ?>
                 <table class="form-table" role="presentation">
                     <tr><th>فعال</th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION); ?>[enabled]" value="1" <?php checked($settings['enabled'], '1'); ?>> ارسال خودکار سفارش‌ها</label></td></tr>
+                    <tr><th>نمایش سفارش به راننده</th><td><label><input type="checkbox" name="<?php echo esc_attr(self::OPTION); ?>[manual_dispatch_only]" value="1" <?php checked($settings['manual_dispatch_only'], '1'); ?>> فقط سفارش‌های انتخاب‌شده و تخصیص‌داده‌شده به راننده نمایش داده شوند</label><p class="description">با فعال‌کردن این گزینه، ورود خودکار سفارش‌های ووکامرس به دلیوری متوقف می‌شود؛ فقط از صفحه ویرایش سفارش، راننده را انتخاب کن و روی «ارسال سفارش به راننده» بزن. سفارش‌های قبلی حذف نمی‌شوند و سفارش‌های تخصیص‌نیافته طبق کنترل دسترسی سامانه دلیوری برای پیک قابل مشاهده نیستند. برداشتن تیک، ورود خودکار سفارش‌ها را طبق وضعیت انتخاب‌شده و گزینه «ارسال خودکار سفارش‌ها» از سر می‌گیرد؛ اما تخصیص راننده همچنان لازم است.</p></td></tr>
                     <tr><th>API URL</th><td><input class="regular-text" dir="ltr" name="<?php echo esc_attr(self::OPTION); ?>[api_url]" value="<?php echo esc_attr($settings['api_url']); ?>"></td></tr>
                     <tr><th>Integration Key</th><td><input class="regular-text" type="password" autocomplete="new-password" dir="ltr" name="<?php echo esc_attr(self::OPTION); ?>[api_key]" value="<?php echo esc_attr($settings['api_key']); ?>"></td></tr>
                     <tr><th>Store ID</th><td><input class="regular-text" dir="ltr" name="<?php echo esc_attr(self::OPTION); ?>[store_id]" value="<?php echo esc_attr($settings['store_id']); ?>"></td></tr>
@@ -102,7 +104,7 @@ final class BHD_Woo_Delivery_Connector {
 
     public static function status_changed($order_id, $from, $to, $order): void {
         $settings = self::settings();
-        if ($settings['enabled'] !== '1') {
+        if ($settings['enabled'] !== '1' || $settings['manual_dispatch_only'] === '1') {
             return;
         }
 
@@ -169,6 +171,13 @@ final class BHD_Woo_Delivery_Connector {
         }
 
         $settings = self::settings();
+        // Re-check at execution time: already queued Action Scheduler/WP-Cron
+        // jobs must not import unwanted orders after the mode is enabled.
+        // The explicit WooCommerce order action and courier-assignment flow
+        // call this method with force=true and remain available.
+        if (!$force && $settings['manual_dispatch_only'] === '1') {
+            return;
+        }
         $validation = self::validate_settings($settings);
         if (is_wp_error($validation)) {
             self::record_error($order, $validation->get_error_message());
@@ -443,6 +452,7 @@ final class BHD_Woo_Delivery_Connector {
     private static function settings(): array {
         $defaults = [
             'enabled' => '0',
+            'manual_dispatch_only' => '0',
             'api_url' => 'http://127.0.0.1:4000/api/integrations/woocommerce/orders',
             'api_key' => '',
             'store_id' => 'dekan',
